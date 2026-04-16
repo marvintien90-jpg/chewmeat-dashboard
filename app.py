@@ -18,6 +18,14 @@ SHEET_GIDS = {
     "2025-01": "672482866",
     "2025-02": "1943981506",
     "2025-03": "847955849",
+    "2025-04": "591730250",
+    "2025-05": "695013616",
+    "2025-06": "897256004",
+    "2025-07": "593028448",
+    "2025-08": "836455215",
+    "2025-09": "1728608975",
+    "2025-10": "2043079442",
+    "2025-11": "1307429413",
     "2025-12": "1838876978",
     "2026-01": "872131612",
     "2026-02": "162899314",
@@ -683,72 +691,101 @@ def main():
             st.plotly_chart(fig8, use_container_width=True)
 
     # ==========================================================
-    # 分頁 7：異常警示
+    # 分頁 7：異常警示（未達日均目標）
     # ==========================================================
     with tab7:
-        st.subheader("⚠️ 異常警示面板")
+        st.subheader("⚠️ 未達日均營收目標警示")
+        st.caption("日均目標 = 本月營業目標 ÷ 當月天數。每天營業額低於此目標即計為「未達標」。")
 
-        alerts = []
-        for store in selected_stores:
-            store_df = filtered[filtered["門店"] == store].sort_values("日期").copy()
-            if store_df.empty:
-                continue
+        # 計算每筆資料的日均目標
+        alert_data = filtered.copy()
+        import calendar
+        alert_data["當月天數"] = alert_data["日期"].apply(
+            lambda x: calendar.monthrange(x.year, x.month)[1]
+        )
+        alert_data["日均目標"] = alert_data["本月目標"] / alert_data["當月天數"]
 
-            for i in range(1, len(store_df)):
-                curr = store_df.iloc[i]
-                prev = store_df.iloc[i - 1]
-                curr_rev = curr["營業額"]
-                prev_rev = prev["營業額"]
-                curr_date = curr["日期"]
-                store_name = curr["門店"]
-                region = curr["區域"]
+        # 篩選有目標且有營業額的資料
+        has_target = alert_data[
+            alert_data["日均目標"].notna()
+            & (alert_data["日均目標"] > 0)
+            & alert_data["營業額"].notna()
+        ].copy()
 
-                if pd.isna(curr_rev) or curr_rev == 0:
-                    alerts.append({
-                        "日期": curr_date, "區域": region, "門店": store_name,
-                        "類型": "🟡 無數據",
-                        "說明": "當天無營收資料，可能尚未輸入",
-                        "嚴重度": 1,
-                    })
-                    continue
-
-                if pd.notna(prev_rev) and prev_rev > 0 and curr_rev < prev_rev * 0.9:
-                    drop_pct = (1 - curr_rev / prev_rev) * 100
-                    alerts.append({
-                        "日期": curr_date, "區域": region, "門店": store_name,
-                        "類型": "🔴 營收下跌",
-                        "說明": f"較前日下跌 {drop_pct:.1f}%（{prev_rev:,.0f} → {curr_rev:,.0f} 元）",
-                        "嚴重度": 2,
-                    })
-
-        if alerts:
-            alert_df = pd.DataFrame(alerts)
-            alert_df = alert_df.sort_values(["嚴重度", "日期"], ascending=[False, False])
-
-            red_count = len(alert_df[alert_df["嚴重度"] == 2])
-            yellow_count = len(alert_df[alert_df["嚴重度"] == 1])
-
-            c1, c2 = st.columns(2)
-            c1.metric("🔴 營收下跌警示", f"{red_count} 筆")
-            c2.metric("🟡 無數據警示", f"{yellow_count} 筆")
-
-            st.subheader("最近警示明細")
-
-            red_alerts = alert_df[alert_df["嚴重度"] == 2].head(30)
-            if not red_alerts.empty:
-                st.markdown("#### 🔴 營收下跌（跌幅 > 10%）")
-                disp_red = red_alerts[["日期", "區域", "門店", "說明"]].copy()
-                disp_red["日期"] = disp_red["日期"].dt.strftime("%Y-%m-%d")
-                st.dataframe(disp_red, use_container_width=True, hide_index=True)
-
-            yellow_alerts = alert_df[alert_df["嚴重度"] == 1].head(30)
-            if not yellow_alerts.empty:
-                st.markdown("#### 🟡 無數據警示")
-                disp_yellow = yellow_alerts[["日期", "區域", "門店", "說明"]].copy()
-                disp_yellow["日期"] = disp_yellow["日期"].dt.strftime("%Y-%m-%d")
-                st.dataframe(disp_yellow, use_container_width=True, hide_index=True)
+        if has_target.empty:
+            st.warning("篩選期間內無足夠資料進行目標達成分析。")
         else:
-            st.success("目前沒有異常警示！一切正常 ✅")
+            # 判斷每天是否未達標
+            has_target["未達標"] = has_target["營業額"] < has_target["日均目標"]
+            has_target["差額"] = has_target["日均目標"] - has_target["營業額"]
+            has_target.loc[~has_target["未達標"], "差額"] = 0
+
+            # 按門店彙總
+            store_alert = has_target.groupby(["區域", "門店"]).agg(
+                有效天數=("營業額", "count"),
+                未達標次數=("未達標", "sum"),
+                損失營業額=("差額", "sum"),
+                日均目標=("日均目標", "mean"),
+                實際日均=("營業額", "mean"),
+            ).reset_index()
+            store_alert["未達標率"] = (store_alert["未達標次數"] / store_alert["有效天數"] * 100).round(1)
+            store_alert = store_alert.sort_values("損失營業額", ascending=False)
+
+            # KPI 卡片
+            total_miss = int(store_alert["未達標次數"].sum())
+            total_loss = store_alert["損失營業額"].sum()
+            worst_store = store_alert.iloc[0]["門店"] if not store_alert.empty else "—"
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("🔴 全店未達標總次數", f"{total_miss} 次")
+            c2.metric("💸 累計損失營業額", f"{fmt_num(total_loss)} 元")
+            c3.metric("⚠️ 損失最多門店", worst_store)
+
+            # 損失營業額排行圖
+            st.subheader("各門店損失營業額排行")
+            fig_loss = go.Figure()
+            fig_loss.add_trace(go.Bar(
+                x=store_alert["門店"], y=store_alert["損失營業額"],
+                marker_color=["#FF4444" if r > 50 else "#FFaa00" for r in store_alert["未達標率"]],
+                hovertemplate="門店：%{x}<br>損失營業額：%{y:,.0f} 元<extra></extra>",
+            ))
+            fig_loss.update_layout(
+                title="各門店累計損失營業額（未達日均目標的差額合計）",
+                xaxis_title="門店", yaxis_title="損失營業額（元）",
+                height=450, xaxis_tickangle=-45,
+            )
+            st.plotly_chart(fig_loss, use_container_width=True)
+
+            # 未達標次數排行圖
+            st.subheader("各門店未達標次數")
+            store_alert_sorted = store_alert.sort_values("未達標次數", ascending=False)
+            fig_miss = go.Figure()
+            fig_miss.add_trace(go.Bar(
+                x=store_alert_sorted["門店"], y=store_alert_sorted["未達標次數"],
+                marker_color="#FF6B6B",
+                text=[f"{n:.0f}次" for n in store_alert_sorted["未達標次數"]],
+                textposition="outside",
+                hovertemplate="門店：%{x}<br>未達標次數：%{y:.0f} 次<extra></extra>",
+            ))
+            fig_miss.update_layout(
+                title="各門店未達日均目標次數",
+                xaxis_title="門店", yaxis_title="未達標次數",
+                height=450, xaxis_tickangle=-45,
+            )
+            st.plotly_chart(fig_miss, use_container_width=True)
+
+            # 明細表
+            st.subheader("門店未達標明細表")
+            disp_alert = store_alert[[
+                "區域", "門店", "有效天數", "未達標次數", "未達標率", "日均目標", "實際日均", "損失營業額"
+            ]].copy()
+            disp_alert["日均目標"] = disp_alert["日均目標"].apply(lambda x: f"{x:,.0f} 元")
+            disp_alert["實際日均"] = disp_alert["實際日均"].apply(lambda x: f"{x:,.0f} 元")
+            disp_alert["損失營業額"] = disp_alert["損失營業額"].apply(lambda x: f"{x:,.0f} 元")
+            disp_alert["未達標次數"] = disp_alert["未達標次數"].astype(int).astype(str) + " 次"
+            disp_alert["未達標率"] = disp_alert["未達標率"].apply(lambda x: f"{x:.1f}%")
+            disp_alert["有效天數"] = disp_alert["有效天數"].astype(int).astype(str) + " 天"
+            st.dataframe(disp_alert, use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":
