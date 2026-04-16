@@ -260,6 +260,58 @@ def main():
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
     # --------------------------------------------------------
+    # 側邊欄：匯出與摘要
+    # --------------------------------------------------------
+    st.sidebar.divider()
+    st.sidebar.header("📤 匯出報表")
+
+    # 匯出 Excel
+    import io
+
+    def to_excel(df):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="營收資料")
+        return output.getvalue()
+
+    export_data = valid[["日期", "區域", "門店", "營業額", "來客數", "客單價", "本月目標", "達成率"]].copy()
+    export_data["日期"] = export_data["日期"].dt.strftime("%Y-%m-%d")
+    excel_bytes = to_excel(export_data)
+
+    st.sidebar.download_button(
+        label="📥 匯出 Excel 報表",
+        data=excel_bytes,
+        file_name=f"嗑肉石鍋_營收報表_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    # 昨日摘要
+    st.sidebar.divider()
+    st.sidebar.header("📋 昨日營收摘要")
+    yesterday = (datetime.now() - timedelta(days=1)).date()
+    yd_data = data[(data["日期"].dt.date == yesterday) & (data["營業額"].notna()) & (data["營業額"] > 0)]
+
+    if not yd_data.empty:
+        yd_total = yd_data["營業額"].sum()
+        yd_cust = yd_data["來客數"].sum()
+        yd_ticket = yd_total / yd_cust if yd_cust > 0 else 0
+        yd_stores = yd_data["門店"].nunique()
+        st.sidebar.markdown(f"""
+**{yesterday.strftime('%Y-%m-%d')} 營收摘要**
+- 總營業額：**{yd_total:,.0f} 元**
+- 總來客數：**{yd_cust:,.0f} 人**
+- 平均客單價：**{yd_ticket:,.0f} 元**
+- 有資料門店：**{yd_stores} 店**
+        """)
+
+        # 昨日各店排行（前5名）
+        yd_rank = yd_data.groupby("門店")["營業額"].sum().sort_values(ascending=False).head(5)
+        rank_text = "\n".join([f"  {i+1}. {s}：{v:,.0f} 元" for i, (s, v) in enumerate(yd_rank.items())])
+        st.sidebar.markdown(f"**昨日前五名：**\n{rank_text}")
+    else:
+        st.sidebar.info("昨日無營收資料。")
+
+    # --------------------------------------------------------
     # 頂部 KPI
     # --------------------------------------------------------
     total_rev = valid["營業額"].sum()
@@ -278,9 +330,10 @@ def main():
     # --------------------------------------------------------
     # 分頁
     # --------------------------------------------------------
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "📈 總覽", "🏪 門店排行", "🔄 店對店比較",
-        "📅 週循環分析", "📊 月循環比較", "🔍 單店下鑽", "⚠️ 異常警示",
+        "📅 週循環分析", "📊 月循環比較", "🏙️ 商圈分析",
+        "🎯 達標追蹤", "🔍 單店下鑽", "⚠️ 異常警示",
     ])
 
     # ==========================================================
@@ -630,9 +683,173 @@ def main():
             st.plotly_chart(fig_yoy, use_container_width=True)
 
     # ==========================================================
-    # 分頁 6：單店下鑽
+    # 分頁 6：商圈分析 ⭐ 新增
     # ==========================================================
     with tab6:
+        st.subheader("🏙️ 商圈 / 區域競爭分析")
+        st.caption("同區域門店互相比較，找出區域內的強弱店")
+
+        # 區域總覽
+        region_sum = valid.groupby("區域").agg({
+            "營業額": "sum", "來客數": "sum",
+        }).reset_index()
+        region_sum["客單價"] = (region_sum["營業額"] / region_sum["來客數"]).round(0)
+        region_sum["門店數"] = valid.groupby("區域")["門店"].nunique().values
+        region_sum = region_sum.sort_values("營業額", ascending=False)
+
+        fig_region = px.bar(
+            region_sum, x="區域", y="營業額", color="區域",
+            title="各區域總營業額", height=350,
+            text=region_sum["營業額"].apply(lambda x: f"{x/10000:,.0f}萬"),
+        )
+        fig_region.update_traces(textposition="outside")
+        fig_region.update_layout(showlegend=False, xaxis_title="區域", yaxis_title="營業額（元）")
+        st.plotly_chart(fig_region, use_container_width=True)
+
+        # 選擇區域進行內部競爭分析
+        sel_region = st.selectbox("選擇區域查看內部競爭", sorted(valid["區域"].dropna().unique()))
+
+        region_stores = valid[valid["區域"] == sel_region].groupby("門店").agg({
+            "營業額": "sum", "來客數": "sum", "本月目標": "first", "達成率": "first",
+        }).reset_index()
+        region_stores["客單價"] = (region_stores["營業額"] / region_stores["來客數"]).round(0)
+        region_stores["日均營業額"] = (region_stores["營業額"] / valid[valid["區域"] == sel_region].groupby("門店")["日期"].nunique().values).round(0)
+        region_stores = region_stores.sort_values("營業額", ascending=False)
+
+        # 區域內排名
+        region_stores["區域排名"] = range(1, len(region_stores) + 1)
+        avg_rev = region_stores["營業額"].mean()
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            fig_rk = go.Figure()
+            colors = ["#44BB44" if r > avg_rev else "#FF6B6B" for r in region_stores["營業額"]]
+            fig_rk.add_trace(go.Bar(
+                x=region_stores["門店"], y=region_stores["營業額"],
+                marker_color=colors,
+                hovertemplate="門店：%{x}<br>營業額：%{y:,.0f} 元<extra></extra>",
+            ))
+            fig_rk.add_hline(y=avg_rev, line_dash="dash", line_color="blue",
+                             annotation_text=f"區域平均 {avg_rev:,.0f} 元")
+            fig_rk.update_layout(
+                title=f"【{sel_region}】門店營業額（綠=高於平均，紅=低於平均）",
+                xaxis_title="門店", yaxis_title="營業額（元）", height=350, xaxis_tickangle=-45,
+            )
+            st.plotly_chart(fig_rk, use_container_width=True)
+
+        with col_b:
+            fig_ticket = go.Figure()
+            avg_ticket_r = region_stores["客單價"].mean()
+            colors2 = ["#44BB44" if t > avg_ticket_r else "#FF6B6B" for t in region_stores["客單價"]]
+            fig_ticket.add_trace(go.Bar(
+                x=region_stores["門店"], y=region_stores["客單價"],
+                marker_color=colors2,
+                hovertemplate="門店：%{x}<br>客單價：%{y:,.0f} 元<extra></extra>",
+            ))
+            fig_ticket.add_hline(y=avg_ticket_r, line_dash="dash", line_color="blue",
+                                 annotation_text=f"區域平均 {avg_ticket_r:,.0f} 元")
+            fig_ticket.update_layout(
+                title=f"【{sel_region}】門店客單價",
+                xaxis_title="門店", yaxis_title="客單價（元）", height=350, xaxis_tickangle=-45,
+            )
+            st.plotly_chart(fig_ticket, use_container_width=True)
+
+        # 區域內門店明細
+        disp_rg = region_stores[["區域排名", "門店", "營業額", "來客數", "客單價", "日均營業額"]].copy()
+        disp_rg["營業額"] = disp_rg["營業額"].apply(lambda x: f"{x:,.0f} 元")
+        disp_rg["來客數"] = disp_rg["來客數"].apply(lambda x: f"{x:,.0f} 人")
+        disp_rg["客單價"] = disp_rg["客單價"].apply(lambda x: f"{x:,.0f} 元")
+        disp_rg["日均營業額"] = disp_rg["日均營業額"].apply(lambda x: f"{x:,.0f} 元")
+        st.dataframe(disp_rg, use_container_width=True, hide_index=True)
+
+    # ==========================================================
+    # 分頁 7：達標進度追蹤 ⭐ 新增
+    # ==========================================================
+    with tab7:
+        st.subheader("🎯 本月達標進度追蹤")
+
+        import calendar
+        today = datetime.now().date()
+        curr_year, curr_month = today.year, today.month
+        days_in_month = calendar.monthrange(curr_year, curr_month)[1]
+        day_of_month = today.day
+
+        st.caption(f"本月：{curr_year}年{curr_month}月 ｜ 今天是第 {day_of_month} 天 / 共 {days_in_month} 天 ｜ 進度 {day_of_month/days_in_month*100:.0f}%")
+
+        # 本月資料
+        curr_month_data = valid[
+            (valid["日期"].dt.year == curr_year) & (valid["日期"].dt.month == curr_month)
+        ]
+
+        if curr_month_data.empty:
+            st.warning("本月尚無資料。")
+        else:
+            # 各門店達標追蹤
+            store_progress = curr_month_data.groupby(["區域", "門店"]).agg({
+                "營業額": "sum", "來客數": "sum", "本月目標": "first",
+            }).reset_index()
+            store_progress["已營業天數"] = curr_month_data.groupby("門店")["日期"].nunique().values
+            store_progress["日均實際"] = (store_progress["營業額"] / store_progress["已營業天數"]).round(0)
+            store_progress["預估月營收"] = (store_progress["日均實際"] * days_in_month).round(0)
+            store_progress["預估達成率"] = (
+                store_progress["預估月營收"] / store_progress["本月目標"] * 100
+            ).round(1)
+            store_progress["目前達成率"] = (
+                store_progress["營業額"] / store_progress["本月目標"] * 100
+            ).round(1)
+            store_progress["預估狀態"] = store_progress["預估達成率"].apply(
+                lambda x: "🟢 可達標" if x >= 100 else ("🟡 略低" if x >= 85 else "🔴 危險")
+            )
+            store_progress = store_progress.sort_values("預估達成率", ascending=False)
+
+            # KPI
+            can_reach = len(store_progress[store_progress["預估達成率"] >= 100])
+            at_risk = len(store_progress[store_progress["預估達成率"] < 85])
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("🟢 預估可達標", f"{can_reach} 店")
+            c2.metric("🔴 預估危險", f"{at_risk} 店")
+            c3.metric("📅 本月剩餘天數", f"{days_in_month - day_of_month} 天")
+
+            # 預估達成率圖表
+            fig_prog = go.Figure()
+            colors_prog = [
+                "#44BB44" if r >= 100 else ("#FFaa00" if r >= 85 else "#FF4444")
+                for r in store_progress["預估達成率"]
+            ]
+            fig_prog.add_trace(go.Bar(
+                x=store_progress["門店"], y=store_progress["預估達成率"],
+                marker_color=colors_prog,
+                text=[f"{r:.0f}%" for r in store_progress["預估達成率"]],
+                textposition="outside",
+                hovertemplate="門店：%{x}<br>預估達成率：%{text}<extra></extra>",
+            ))
+            fig_prog.add_hline(y=100, line_dash="dash", line_color="red", annotation_text="目標 100%")
+            fig_prog.update_layout(
+                title=f"{curr_year}年{curr_month}月 各門店預估達成率",
+                xaxis_title="門店", yaxis_title="預估達成率（%）",
+                height=450, xaxis_tickangle=-45,
+            )
+            st.plotly_chart(fig_prog, use_container_width=True)
+
+            # 明細表
+            st.subheader("門店達標進度明細")
+            disp_prog = store_progress[[
+                "區域", "門店", "營業額", "本月目標", "目前達成率",
+                "日均實際", "預估月營收", "預估達成率", "預估狀態",
+            ]].copy()
+            disp_prog["營業額"] = disp_prog["營業額"].apply(lambda x: f"{x:,.0f} 元")
+            disp_prog["本月目標"] = disp_prog["本月目標"].apply(lambda x: f"{x:,.0f} 元" if pd.notna(x) else "—")
+            disp_prog["日均實際"] = disp_prog["日均實際"].apply(lambda x: f"{x:,.0f} 元")
+            disp_prog["預估月營收"] = disp_prog["預估月營收"].apply(lambda x: f"{x:,.0f} 元")
+            disp_prog["目前達成率"] = disp_prog["目前達成率"].apply(lambda x: f"{x:.1f}%")
+            disp_prog["預估達成率"] = disp_prog["預估達成率"].apply(lambda x: f"{x:.1f}%")
+            st.dataframe(disp_prog, use_container_width=True, hide_index=True)
+
+    # ==========================================================
+    # 分頁 8：單店下鑽
+    # ==========================================================
+    with tab8:
         st.subheader("單店下鑽分析")
 
         drill_store = st.selectbox("選擇要分析的門店", selected_stores)
@@ -693,7 +910,7 @@ def main():
     # ==========================================================
     # 分頁 7：異常警示（未達日均目標）
     # ==========================================================
-    with tab7:
+    with tab9:
         st.subheader("⚠️ 未達日均營收目標警示")
         st.caption("日均目標 = 本月營業目標 ÷ 當月天數。每天營業額低於此目標即計為「未達標」。")
 
