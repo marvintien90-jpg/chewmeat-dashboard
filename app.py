@@ -51,6 +51,7 @@ st.set_page_config(
 # 自訂 CSS（優化 Mac + iPhone）
 # ============================================================
 st.markdown("""
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>
     /* 全局 */
     .main .block-container {padding-top: 2rem; padding-bottom: 2rem;}
@@ -227,9 +228,18 @@ def plotly_chart(fig, key=None):
     st.plotly_chart(fig, use_container_width=True, config=MOBILE_CHART_CONFIG, key=key)
 
 
+def bsh(icon, text, level=2):
+    tag = f"h{level}"
+    st.markdown(
+        f'<{tag} style="display:flex;align-items:center;gap:.4rem">'
+        f'<i class="bi {icon}"></i> {text}</{tag}>',
+        unsafe_allow_html=True,
+    )
+
+
 def get_date_filter(data, key_prefix="", active_stores=None):
     """展開式篩選器 - 每頁通用"""
-    with st.expander("🔍 篩選條件", expanded=False):
+    with st.expander("篩選條件", expanded=False):
         c1, c2, c3 = st.columns([2, 1, 1])
         min_date = data["日期"].min().date()
         max_date = data["日期"].max().date()
@@ -288,8 +298,8 @@ def calc_kpi_card(data, period_label, start_d, end_d, compare_start=None, compar
 # 分頁函數
 # ============================================================
 def page_overview(data):
-    """📊 總覽（四大累計）"""
-    st.header("📊 總覽")
+    """總覽（四大累計）"""
+    bsh("bi-bar-chart-line", "總覽", level=2)
 
     filtered, start_d, end_d, sel_regions, sel_stores = get_date_filter(data, "ov")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
@@ -303,7 +313,7 @@ def page_overview(data):
     yr, mn = today.year, today.month
 
     # ========== 四大累計卡片 ==========
-    st.subheader("💎 四大累計分析")
+    bsh("bi-gem", "四大累計分析", level=3)
 
     # 曆年累計（所有歷史資料至最新日）
     yoy_total = data[data["營業額"].notna() & (data["營業額"] > 0)]["營業額"].sum()
@@ -338,18 +348,18 @@ def page_overview(data):
     m_rate = (m_total / cur_month_target * 100) if cur_month_target > 0 else None
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("📚 曆年累計", f"{yoy_total:,.0f} 元")
-    c2.metric("🗓️ 今年累計", f"{y_total:,.0f} 元",
+    c1.metric("曆年累計", f"{yoy_total:,.0f} 元")
+    c2.metric("今年累計", f"{y_total:,.0f} 元",
               delta=f"{y_delta:+.1f}% vs 去年同期" if y_delta is not None else None)
-    c3.metric("🎯 本季累計", f"{q_total:,.0f} 元",
+    c3.metric("本季累計", f"{q_total:,.0f} 元",
               delta=f"{q_delta:+.1f}% vs 去年同期" if q_delta is not None else None)
-    c4.metric("📅 本月累計", f"{m_total:,.0f} 元",
+    c4.metric("本月累計", f"{m_total:,.0f} 元",
               delta=f"達成 {m_rate:.1f}%" if m_rate else None)
 
     st.divider()
 
     # ========== 每日營收趨勢 ==========
-    st.subheader("📈 每日營收趨勢")
+    bsh("bi-graph-up-arrow", "每日營收趨勢", level=3)
     daily = valid.groupby("日期").agg({"營業額": "sum", "來客數": "sum"}).reset_index()
     daily["客單價"] = (daily["營業額"] / daily["來客數"]).round(0)
 
@@ -361,7 +371,7 @@ def page_overview(data):
     plotly_chart(fig2, key="ov_dual")
 
     # ========== 區域營收佔比 Sunburst ==========
-    st.subheader("🌞 區域 / 門店營收結構")
+    bsh("bi-pie-chart", "區域 / 門店營收結構", level=3)
     sunburst_data = valid.groupby(["區域", "門店"])["營業額"].sum().reset_index()
     fig_sb = px.sunburst(
         sunburst_data, path=["區域", "門店"], values="營業額",
@@ -373,8 +383,8 @@ def page_overview(data):
 
 
 def page_store_rank(data):
-    """🏪 門店排行"""
-    st.header("🏪 門店排行")
+    """門店排行"""
+    bsh("bi-shop", "門店排行")
     filtered, _, _, _, sel_stores = get_date_filter(data, "rk")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
@@ -400,7 +410,7 @@ def page_store_rank(data):
 
     # 達成率儀表板（選前 6 名）
     if store_sum["達成率"].notna().any():
-        st.subheader("🎯 前六店達成率儀表板")
+        bsh("bi-bullseye", "前六店達成率儀表板", level=3)
         top6 = store_sum[store_sum["達成率"].notna()].head(6)
         cols = st.columns(3)
         for i, (_, row) in enumerate(top6.iterrows()):
@@ -425,7 +435,7 @@ def page_store_rank(data):
                 plotly_chart(fig_g, key=f"gauge_{i}")
 
     # 明細表
-    st.subheader("📋 明細表")
+    bsh("bi-table", "明細表", level=3)
     disp = store_sum[["區域", "門店", "營業額", "來客數", "客單價", "達成率"]].copy()
     disp["營業額"] = disp["營業額"].apply(lambda x: f"{x:,.0f} 元")
     disp["來客數"] = disp["來客數"].apply(lambda x: f"{x:,.0f} 人")
@@ -435,8 +445,8 @@ def page_store_rank(data):
 
 
 def page_store_compare(data):
-    """🔄 店對店比較"""
-    st.header("🔄 店對店比較")
+    """店對店比較"""
+    bsh("bi-arrow-left-right", "店對店比較")
     filtered, _, _, _, sel_stores = get_date_filter(data, "cmp")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
@@ -490,8 +500,8 @@ def page_store_compare(data):
 
 
 def page_cycle_week(data):
-    """📅 週循環分析"""
-    st.header("📅 週循環分析")
+    """週循環分析"""
+    bsh("bi-calendar-week", "週循環分析")
     filtered, _, _, _, sel_stores = get_date_filter(data, "wk")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
@@ -531,7 +541,7 @@ def page_cycle_week(data):
     plotly_chart(fig, key="wk_weekday")
 
     # 熱力圖：日 × 門店
-    st.subheader("🔥 熱力圖：選定期間各門店每日營業額")
+    bsh("bi-fire", "熱力圖：選定期間各門店每日營業額", level=3)
     heat = wk_data.pivot_table(index="門店", columns="日期", values="營業額", aggfunc="sum")
     if not heat.empty:
         fig_h = px.imshow(
@@ -546,8 +556,8 @@ def page_cycle_week(data):
 
 
 def page_cycle_month(data):
-    """📊 月循環比較"""
-    st.header("📊 月循環比較")
+    """月循環比較"""
+    bsh("bi-calendar-month", "月循環比較")
     filtered, _, _, _, sel_stores = get_date_filter(data, "mo")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
@@ -598,8 +608,8 @@ def page_cycle_month(data):
 
 
 def page_cycle_quarter(data):
-    """📆 季循環分析（新增）"""
-    st.header("📆 季循環分析")
+    """季循環分析"""
+    bsh("bi-calendar3-range", "季循環分析")
     filtered, _, _, _, _ = get_date_filter(data, "qt")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
@@ -636,8 +646,8 @@ def page_cycle_quarter(data):
 
 
 def page_cycle_year(data):
-    """🗓️ 年循環比較（新增）"""
-    st.header("🗓️ 年循環比較")
+    """年循環比較"""
+    bsh("bi-calendar3", "年循環比較")
     filtered, _, _, _, _ = get_date_filter(data, "yr")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
@@ -687,8 +697,8 @@ def page_cycle_year(data):
 
 
 def page_region(data):
-    """🏙️ 商圈分析"""
-    st.header("🏙️ 商圈 / 區域競爭分析")
+    """商圈分析"""
+    bsh("bi-buildings", "商圈 / 區域競爭分析")
     filtered, _, _, _, _ = get_date_filter(data, "rg")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
@@ -746,8 +756,8 @@ def page_region(data):
 
 
 def page_target(data):
-    """🎯 達標追蹤"""
-    st.header("🎯 本月達標進度追蹤")
+    """達標追蹤"""
+    bsh("bi-bullseye", "本月達標進度追蹤")
 
     today = data["日期"].max().date()
     yr, mn = today.year, today.month
@@ -774,14 +784,14 @@ def page_target(data):
     store_progress["預估達成率"] = (store_progress["預估月營收"] / store_progress["本月目標"] * 100).round(1)
     store_progress["目前達成率"] = (store_progress["營業額"] / store_progress["本月目標"] * 100).round(1)
     store_progress["狀態"] = store_progress["預估達成率"].apply(
-        lambda x: "🟢 可達標" if x >= 100 else ("🟡 略低" if x >= 85 else "🔴 危險")
+        lambda x: "可達標" if x >= 100 else ("略低" if x >= 85 else "危險")
     )
     store_progress = store_progress.sort_values("預估達成率", ascending=False)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("🟢 預估可達標", f"{len(store_progress[store_progress['預估達成率'] >= 100])} 店")
-    c2.metric("🔴 預估危險", f"{len(store_progress[store_progress['預估達成率'] < 85])} 店")
-    c3.metric("📅 本月剩餘天數", f"{days_in_month - day_of_month} 天")
+    c1.metric("預估可達標", f"{len(store_progress[store_progress['預估達成率'] >= 100])} 店")
+    c2.metric("預估危險", f"{len(store_progress[store_progress['預估達成率'] < 85])} 店")
+    c3.metric("本月剩餘天數", f"{days_in_month - day_of_month} 天")
 
     # 達成率儀表板 bar chart
     fig = go.Figure()
@@ -814,8 +824,8 @@ def page_target(data):
 
 
 def page_drill(data):
-    """🔍 單店下鑽"""
-    st.header("🔍 單店下鑽分析")
+    """單店下鑽"""
+    bsh("bi-search", "單店下鑽分析")
     filtered, _, _, _, sel_stores = get_date_filter(data, "dr")
     valid = filtered[filtered["營業額"].notna() & (filtered["營業額"] > 0)]
 
@@ -854,8 +864,8 @@ def page_drill(data):
 
 
 def page_alert(data):
-    """⚠️ 異常警示"""
-    st.header("⚠️ 未達日均目標警示")
+    """異常警示"""
+    bsh("bi-exclamation-triangle", "未達日均目標警示")
     filtered, _, _, _, _ = get_date_filter(data, "al")
     alert_data = filtered.copy()
     alert_data["當月天數"] = alert_data["日期"].apply(
@@ -887,9 +897,9 @@ def page_alert(data):
     total_loss = sa["損失營業額"].sum()
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("🔴 全店未達標次數", f"{total_miss} 次")
-    c2.metric("💸 累計損失營業額", f"{total_loss:,.0f} 元")
-    c3.metric("⚠️ 損失最多門店", sa.iloc[0]["門店"] if len(sa) else "—")
+    c1.metric("全店未達標次數", f"{total_miss} 次")
+    c2.metric("累計損失營業額", f"{total_loss:,.0f} 元")
+    c3.metric("損失最多門店", sa.iloc[0]["門店"] if len(sa) else "—")
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -968,22 +978,28 @@ def main():
         return
 
     # 側邊欄：垂直分頁選單
-    st.sidebar.markdown("## 🍲 嗑肉石鍋")
+    st.sidebar.markdown(
+        '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.25rem">'
+        '<i class="bi bi-cup-hot" style="font-size:1.4rem;color:#FF6B6B"></i>'
+        '<span style="font-size:1.15rem;font-weight:700">嗑肉石鍋</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     st.sidebar.caption(f"資料更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     st.sidebar.divider()
 
     pages = {
-        "📊 總覽": page_overview,
-        "🏪 門店排行": page_store_rank,
-        "🔄 店對店比較": page_store_compare,
-        "📅 週循環分析": page_cycle_week,
-        "📊 月循環比較": page_cycle_month,
-        "📆 季循環分析": page_cycle_quarter,
-        "🗓️ 年循環比較": page_cycle_year,
-        "🏙️ 商圈分析": page_region,
-        "🎯 達標追蹤": page_target,
-        "🔍 單店下鑽": page_drill,
-        "⚠️ 異常警示": page_alert,
+        "總覽": page_overview,
+        "門店排行": page_store_rank,
+        "店對店比較": page_store_compare,
+        "週循環分析": page_cycle_week,
+        "月循環比較": page_cycle_month,
+        "季循環分析": page_cycle_quarter,
+        "年循環比較": page_cycle_year,
+        "商圈分析": page_region,
+        "達標追蹤": page_target,
+        "單店下鑽": page_drill,
+        "異常警示": page_alert,
     }
 
     selected = st.sidebar.radio("功能選單", list(pages.keys()), label_visibility="collapsed")
@@ -991,7 +1007,7 @@ def main():
     st.sidebar.divider()
 
     # 匯出
-    if st.sidebar.button("🔄 重新載入資料"):
+    if st.sidebar.button("重新載入資料"):
         st.cache_data.clear()
         st.rerun()
 
@@ -1006,7 +1022,7 @@ def main():
         return out.getvalue()
 
     st.sidebar.download_button(
-        label="📥 匯出 Excel",
+        label="匯出 Excel",
         data=to_excel(export_df),
         file_name=f"嗑肉石鍋_營收_{datetime.now().strftime('%Y%m%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
