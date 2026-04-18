@@ -1,7 +1,9 @@
 """
 數據中樞引擎 — 供各分頁調用的全域資料讀取與店名模糊比對工具。
 """
+from __future__ import annotations
 import re
+from typing import Optional, List
 import pandas as pd
 import streamlit as st
 
@@ -35,7 +37,7 @@ def _normalize(name: str) -> str:
     return name
 
 
-def fuzzy_match_store(query: str, candidates: list[str]) -> str | None:
+def fuzzy_match_store(query: str, candidates: List[str]) -> Optional[str]:
     """
     從 candidates 中找出與 query 最接近的店名。
     先做正規化後子字串比對；找不到則回傳 None。
@@ -148,7 +150,7 @@ def load_revenue_sheet(year_month: str, gid: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_all_revenue(months: list[str] | None = None) -> pd.DataFrame:
+def load_all_revenue(months: Optional[List[str]] = None) -> pd.DataFrame:
     """
     讀取所有（或指定）月份的營收資料，回傳寬表（已 pivot）。
     欄位：日期, 年月, 商圈, 店名, 月目標, 業績合計, 人數合計, 平均客單
