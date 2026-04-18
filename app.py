@@ -48,30 +48,503 @@ st.set_page_config(
 )
 
 # ============================================================
-# 自訂 CSS（優化 Mac + iPhone）
+# 全新設計系統 CSS（Premium 50萬級）
 # ============================================================
 st.markdown("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>
-    /* 全局 */
-    .main .block-container {padding-top: 2rem; padding-bottom: 2rem;}
-    /* KPI 卡片 */
-    [data-testid="stMetric"] {
-        background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
-        padding: 16px;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        border: 1px solid #e0e4e8;
-    }
-    [data-testid="stMetricLabel"] {font-size: 0.9rem; color: #666;}
-    [data-testid="stMetricValue"] {font-size: 1.6rem; font-weight: 700; color: #1a1a2e;}
-    /* 側邊欄 */
-    [data-testid="stSidebar"] {background: #fafbfc;}
-    /* 手機優化 */
-    @media (max-width: 768px) {
-        .main .block-container {padding: 1rem;}
-        [data-testid="stMetricValue"] {font-size: 1.2rem;}
-    }
+/* ── CSS Variables ── */
+:root {
+  --brand:        #FF6B35;
+  --brand-dark:   #E0551F;
+  --brand-light:  #FF8F5E;
+  --brand-glow:   rgba(255,107,53,.18);
+  --accent:       #3B82F6;
+  --success:      #10B981;
+  --warning:      #F59E0B;
+  --danger:       #EF4444;
+  --bg:           #F4F6FA;
+  --surface:      #FFFFFF;
+  --surface-2:    #F8FAFC;
+  --surface-3:    #EFF3F8;
+  --text-1:       #0F172A;
+  --text-2:       #475569;
+  --text-3:       #94A3B8;
+  --border:       #E2E8F0;
+  --border-2:     #CBD5E1;
+  --r:            14px;
+  --r-sm:         8px;
+  --r-lg:         20px;
+  --shadow-xs:    0 1px 3px rgba(15,23,42,.06);
+  --shadow-sm:    0 2px 8px rgba(15,23,42,.07), 0 1px 2px rgba(15,23,42,.04);
+  --shadow:       0 4px 20px rgba(15,23,42,.09), 0 1px 4px rgba(15,23,42,.05);
+  --shadow-lg:    0 12px 40px rgba(15,23,42,.13), 0 4px 8px rgba(15,23,42,.05);
+  --shadow-brand: 0 6px 24px rgba(255,107,53,.32);
+}
+
+/* ── Base ── */
+html, body, [class*="st-"] {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+}
+.stApp { background: var(--bg); }
+.main .block-container {
+  padding-top: 1.5rem;
+  padding-bottom: 3rem;
+  max-width: 1440px;
+}
+header[data-testid="stHeader"] { display: none; }
+#MainMenu { display: none; }
+footer { display: none; }
+
+/* ── KPI Cards ── */
+[data-testid="stMetric"] {
+  background: var(--surface);
+  border-radius: var(--r);
+  padding: 22px 24px 18px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow .2s ease, transform .2s ease;
+  position: relative;
+  overflow: hidden;
+}
+[data-testid="stMetric"]::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--brand), var(--brand-light));
+  border-radius: var(--r) var(--r) 0 0;
+}
+[data-testid="stMetric"]:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow);
+}
+[data-testid="stMetricLabel"] {
+  font-size: .78rem !important;
+  font-weight: 700 !important;
+  color: var(--text-3) !important;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+[data-testid="stMetricValue"] {
+  font-size: 1.8rem !important;
+  font-weight: 800 !important;
+  color: var(--text-1) !important;
+  letter-spacing: -.03em;
+  line-height: 1.15;
+}
+[data-testid="stMetricDelta"] {
+  font-size: .8rem !important;
+  font-weight: 600 !important;
+}
+[data-testid="stMetricDelta"] > div { border-radius: 20px; padding: 1px 8px; }
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {
+  background: var(--surface) !important;
+  border-right: 1px solid var(--border) !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] > div { gap: 2px !important; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+  padding: 9px 14px !important;
+  border-radius: var(--r-sm) !important;
+  cursor: pointer !important;
+  transition: all .14s ease !important;
+  font-size: .875rem !important;
+  font-weight: 500 !important;
+  color: var(--text-2) !important;
+  border: 1px solid transparent !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {
+  background: var(--surface-3) !important;
+  color: var(--text-1) !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] [aria-checked="true"] ~ div label,
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-checked="true"] {
+  background: linear-gradient(135deg,#FFF2EC,#FFF7F4) !important;
+  color: var(--brand) !important;
+  font-weight: 700 !important;
+  border-color: rgba(255,107,53,.2) !important;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+  border-radius: var(--r-sm) !important;
+  font-weight: 600 !important;
+  font-size: .875rem !important;
+  transition: all .15s ease !important;
+  letter-spacing: .01em;
+}
+.stButton > button[data-testid="baseButton-primary"],
+.stButton > button[kind="primary"] {
+  background: linear-gradient(135deg, var(--brand), var(--brand-light)) !important;
+  border: none !important;
+  color: white !important;
+  box-shadow: var(--shadow-brand) !important;
+}
+.stButton > button[data-testid="baseButton-primary"]:hover,
+.stButton > button[kind="primary"]:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 28px rgba(255,107,53,.4) !important;
+}
+.stButton > button[data-testid="baseButton-secondary"],
+.stButton > button[kind="secondary"] {
+  background: var(--surface) !important;
+  border: 1.5px solid var(--border-2) !important;
+  color: var(--text-2) !important;
+}
+.stButton > button[data-testid="baseButton-secondary"]:hover,
+.stButton > button[kind="secondary"]:hover {
+  border-color: var(--brand) !important;
+  color: var(--brand) !important;
+  background: #FFF2EC !important;
+}
+
+/* ── Tabs ── */
+[data-testid="stTabs"] [role="tablist"] {
+  border-bottom: 2px solid var(--border);
+  gap: 0;
+  background: transparent;
+}
+[data-testid="stTabs"] [role="tab"] {
+  border-radius: var(--r-sm) var(--r-sm) 0 0 !important;
+  font-weight: 600 !important;
+  font-size: .875rem !important;
+  padding: 10px 20px !important;
+  color: var(--text-2) !important;
+  border: none !important;
+  background: transparent !important;
+  transition: all .15s ease !important;
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+  color: var(--brand) !important;
+  background: #FFF2EC !important;
+  border-bottom: 2px solid var(--brand) !important;
+}
+[data-testid="stTabs"] [role="tab"]:hover { background: var(--surface-3) !important; }
+
+/* ── Expander ── */
+[data-testid="stExpander"] {
+  border: 1px solid var(--border) !important;
+  border-radius: var(--r) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--shadow-xs) !important;
+}
+[data-testid="stExpander"] summary {
+  font-weight: 600 !important;
+  color: var(--text-1) !important;
+  padding: 12px 16px !important;
+}
+
+/* ── DataFrame ── */
+[data-testid="stDataFrame"] {
+  border-radius: var(--r) !important;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border) !important;
+}
+
+/* ── Divider ── */
+hr { border-color: var(--border) !important; margin: 1.25rem 0 !important; }
+
+/* ── Selectbox & Inputs ── */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stTextInput"] > div > div,
+[data-testid="stTextArea"] textarea {
+  border-radius: var(--r-sm) !important;
+  border-color: var(--border) !important;
+  font-size: .875rem !important;
+}
+[data-testid="stSelectbox"] > div > div:focus-within,
+[data-testid="stTextInput"] > div > div:focus-within {
+  border-color: var(--brand) !important;
+  box-shadow: 0 0 0 3px var(--brand-glow) !important;
+}
+
+/* ── Chat Interface ── */
+.chat-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 8px 0 16px;
+}
+.chat-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.chat-row.user-row { flex-direction: row-reverse; }
+.chat-avatar {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: .95rem;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+.chat-avatar.ai-av {
+  background: linear-gradient(135deg, var(--brand), var(--brand-light));
+  color: #fff;
+  box-shadow: var(--shadow-brand);
+}
+.chat-avatar.user-av {
+  background: linear-gradient(135deg,#3B82F6,#60A5FA);
+  color: #fff;
+}
+.chat-bubble {
+  max-width: 78%;
+  border-radius: 0 var(--r) var(--r) var(--r);
+  padding: 12px 16px;
+  font-size: .875rem;
+  line-height: 1.65;
+  box-shadow: var(--shadow-xs);
+}
+.chat-bubble.ai-bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+}
+.chat-bubble.user-bubble {
+  background: linear-gradient(135deg, var(--brand), var(--brand-light));
+  color: #fff;
+  border-radius: var(--r) 0 var(--r) var(--r);
+  box-shadow: var(--shadow-brand);
+}
+.chat-meta {
+  font-size: .7rem;
+  color: var(--text-3);
+  margin-top: 5px;
+  text-align: left;
+}
+.chat-row.user-row .chat-meta { text-align: right; }
+
+/* ── Quick Actions ── */
+.qa-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 18px; }
+.qa-pill {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  padding: 7px 14px;
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all .15s ease;
+  white-space: nowrap;
+}
+.qa-pill:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: #FFF2EC;
+  box-shadow: 0 2px 10px var(--brand-glow);
+}
+
+/* ── Page Banner ── */
+.page-banner {
+  background: linear-gradient(135deg,#0F172A 0%,#1E293B 60%,#0F3460 100%);
+  border-radius: var(--r-lg);
+  padding: 22px 28px;
+  margin-bottom: 22px;
+  position: relative;
+  overflow: hidden;
+}
+.page-banner::before {
+  content: '';
+  position: absolute;
+  top: -40%; right: -8%;
+  width: 240px; height: 240px;
+  background: radial-gradient(circle, rgba(255,107,53,.35), transparent 68%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.page-banner::after {
+  content: '';
+  position: absolute;
+  bottom: -30%; left: 30%;
+  width: 160px; height: 160px;
+  background: radial-gradient(circle, rgba(59,130,246,.2), transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.page-banner h2 {
+  color: #fff !important;
+  margin: 0 0 4px;
+  font-size: 1.45rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -.02em;
+  position: relative;
+}
+.page-banner p {
+  color: rgba(255,255,255,.65);
+  margin: 0;
+  font-size: .85rem;
+  position: relative;
+}
+
+/* ── Insight Cards ── */
+.insight-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 15px 18px;
+  margin-bottom: 10px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  box-shadow: var(--shadow-xs);
+  transition: all .2s ease;
+}
+.insight-card:hover {
+  box-shadow: var(--shadow);
+  transform: translateX(3px);
+}
+.insight-icon {
+  width: 42px; height: 42px;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+.insight-body { flex: 1; min-width: 0; }
+.insight-cat {
+  font-size: .68rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .1em;
+  margin-bottom: 3px;
+}
+.insight-title {
+  font-size: .93rem; font-weight: 700;
+  color: var(--text-1); margin-bottom: 3px;
+  line-height: 1.4;
+}
+.insight-detail { font-size: .8rem; color: var(--text-2); line-height: 1.5; }
+
+/* ── Sidebar Brand ── */
+.sb-brand {
+  background: linear-gradient(135deg,#FF6B35 0%,#FF8F5E 100%);
+  margin: -1rem -1rem 1rem;
+  padding: 18px 18px 16px;
+  position: relative;
+  overflow: hidden;
+}
+.sb-brand::after {
+  content: '';
+  position: absolute;
+  bottom: -24px; right: -16px;
+  width: 90px; height: 90px;
+  background: rgba(255,255,255,.14);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.sb-brand-name { font-size: 1.05rem; font-weight: 800; color: #fff; letter-spacing: -.01em; }
+.sb-brand-sub { font-size: .73rem; color: rgba(255,255,255,.8); margin-top: 1px; }
+
+/* ── Yesterday Summary ── */
+.yd-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 13px 15px;
+  margin-top: 2px;
+}
+.yd-title { font-size: .75rem; font-weight: 800; color: var(--text-1); margin-bottom: 6px; }
+.yd-row { display: flex; align-items: center; gap: 6px; font-size: .83rem; color: var(--text-2); margin: 3px 0; }
+.yd-val { font-weight: 700; color: var(--text-1); }
+.up { color: var(--success) !important; font-weight: 700; }
+.dn { color: var(--danger)  !important; font-weight: 700; }
+
+/* ── AI Assistant Header ── */
+.ai-header {
+  background: linear-gradient(135deg,#667EEA,#764BA2,#F64F59);
+  border-radius: var(--r-lg);
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.ai-header-icon {
+  width: 52px; height: 52px;
+  background: rgba(255,255,255,.2);
+  border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem;
+  flex-shrink: 0;
+  backdrop-filter: blur(4px);
+}
+.ai-header-text h3 { color: #fff; margin: 0; font-size: 1.2rem; font-weight: 800; }
+.ai-header-text p  { color: rgba(255,255,255,.75); margin: 3px 0 0; font-size: .82rem; }
+
+/* ── Chat Panel ── */
+.chat-panel {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  min-height: 280px;
+  max-height: 520px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+.empty-chat {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 220px; gap: 10px; color: var(--text-3);
+}
+.empty-chat i { font-size: 2.5rem; opacity: .4; }
+.empty-chat p { font-size: .88rem; font-weight: 500; margin: 0; }
+
+/* ── Section Header ── */
+.section-header {
+  display: flex; align-items: center; gap: 8px;
+  margin: 1.5rem 0 .8rem;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--border);
+}
+.section-header i { color: var(--brand); font-size: 1.1rem; }
+.section-header span { font-size: 1rem; font-weight: 700; color: var(--text-1); }
+
+/* ── Badges ── */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 10px; border-radius: 20px;
+  font-size: .72rem; font-weight: 700;
+}
+.badge-success { background:#D1FAE5; color:#065F46; }
+.badge-warning { background:#FEF3C7; color:#92400E; }
+.badge-danger  { background:#FEE2E2; color:#991B1B; }
+.badge-info    { background:#DBEAFE; color:#1E40AF; }
+.badge-purple  { background:#EDE9FE; color:#5B21B6; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* ── Animations ── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+[data-testid="stMetric"] { animation: fadeUp .35s ease both; }
+
+/* ── Mobile RWD ── */
+@media (max-width: 768px) {
+  .main .block-container { padding: .75rem .75rem 5rem !important; }
+  [data-testid="stMetricValue"] { font-size: 1.3rem !important; }
+  [data-testid="stMetricLabel"] { font-size: .72rem !important; }
+  .page-banner { padding: 14px 16px; margin-bottom: 14px; }
+  .page-banner h2 { font-size: 1.15rem !important; }
+  .chat-bubble { max-width: 92%; font-size: .82rem; }
+  .ai-header { padding: 14px 16px; gap: 12px; }
+  .ai-header-icon { width: 42px; height: 42px; font-size: 1.2rem; }
+}
+@media (max-width: 480px) {
+  [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+  .chat-bubble { max-width: 96%; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -233,12 +706,17 @@ def plotly_chart(fig, key=None):
 
 
 def bsh(icon, text, level=2):
-    tag = f"h{level}"
-    st.markdown(
-        f'<{tag} style="display:flex;align-items:center;gap:.4rem">'
-        f'<i class="bi {icon}"></i> {text}</{tag}>',
-        unsafe_allow_html=True,
-    )
+    if level == 2:
+        st.markdown(
+            f'<div class="page-banner"><h2><i class="bi {icon}" style="opacity:.85"></i> {text}</h2>'
+            f'<p>即時數據・智慧洞察・協助您做出最佳決策</p></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f'<div class="section-header"><i class="bi {icon}"></i><span>{text}</span></div>',
+            unsafe_allow_html=True,
+        )
 
 
 def get_date_filter(data, key_prefix="", active_stores=None):
@@ -1116,24 +1594,29 @@ def generate_rule_insights(data):
 
 
 def _insight_card(ins):
-    """渲染單張洞察卡片"""
-    bg = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#d1ecf1"}.get(ins["level"], "#f8f9fa")
-    border = {"success": "#28a745", "error": "#dc3545", "warning": "#e6a817", "info": "#17a2b8"}.get(ins["level"], "#6c757d")
+    """渲染單張洞察卡片（Premium 版）"""
+    palette = {
+        "success": ("#D1FAE5", "#10B981", "#065F46"),
+        "error":   ("#FEE2E2", "#EF4444", "#991B1B"),
+        "warning": ("#FEF3C7", "#F59E0B", "#92400E"),
+        "info":    ("#DBEAFE", "#3B82F6", "#1E40AF"),
+    }
+    bg, icon_bg, text_col = palette.get(ins["level"], ("#F1F5F9", "#64748B", "#334155"))
     st.markdown(f"""
-<div style="background:{bg};border-left:4px solid {border};padding:12px 16px;border-radius:8px;margin-bottom:10px;">
-  <div style="font-size:0.7rem;color:#666;font-weight:700;text-transform:uppercase;margin-bottom:3px;">{ins['icon']} {ins['category']}</div>
-  <div style="font-size:0.95rem;font-weight:700;color:#222;margin-bottom:3px;">{ins['title']}</div>
-  <div style="font-size:0.82rem;color:#555;">{ins['detail']}</div>
+<div class="insight-card">
+  <div class="insight-icon" style="background:{bg}">
+    <span style="color:{icon_bg}">{ins['icon']}</span>
+  </div>
+  <div class="insight-body">
+    <div class="insight-cat" style="color:{icon_bg}">{ins['category']}</div>
+    <div class="insight-title">{ins['title']}</div>
+    <div class="insight-detail">{ins['detail']}</div>
+  </div>
 </div>""", unsafe_allow_html=True)
 
 
-def call_claude_api(data, api_key, analysis_type):
-    """Claude API 介面"""
-    try:
-        import anthropic
-    except ImportError:
-        return "請先安裝套件：`pip install anthropic`"
-
+def _build_data_context(data):
+    """建立 AI 分析用的資料摘要字串"""
     valid = data[data["營業額"].notna() & (data["營業額"] > 0)]
     today = valid["日期"].max().date()
     yr, mn = today.year, today.month
@@ -1143,48 +1626,78 @@ def call_claude_api(data, api_key, analysis_type):
         營業額=("營業額", "sum"), 來客數=("來客數", "sum"), 本月目標=("本月目標", "first"),
     ).reset_index()
     sp["達成率%"] = (sp["營業額"] / sp["本月目標"] * 100).round(1)
-    summary = sp.to_string(index=False)
 
-    prompts = {
-        "本月營收健康報告": f"請為以下嗑肉石鍋 {yr}年{mn}月 門店數據撰寫一份營收健康報告，指出亮點與問題：\n{summary}",
-        "門店異常深度分析": f"分析以下門店數據，找出異常表現的門店並解釋可能原因：\n{summary}",
-        "改善建議（最差門店）": f"針對以下達成率最低的門店，提供 3 條具體可行的改善建議：\n{summary}",
-        "最佳實務萃取": f"從以下高達成率門店，萃取可複製的成功模式供其他門店參考：\n{summary}",
-    }
+    week_sum = valid.groupby("年週")["營業額"].sum().reset_index().sort_values("年週")
+    wow_text = ""
+    if len(week_sum) >= 2:
+        this_w = week_sum.iloc[-1]["營業額"]
+        last_w = week_sum.iloc[-2]["營業額"]
+        wow = (this_w - last_w) / last_w * 100 if last_w > 0 else 0
+        wow_text = f"\n最新週環比：{wow:+.1f}%（本週 {this_w/10000:.1f} 萬 vs 上週 {last_w/10000:.1f} 萬）"
+
+    return f"""=== 嗑肉石鍋 {yr}年{mn}月 門店數據（截至 {today}）===
+{sp.to_string(index=False)}
+{wow_text}
+"""
+
+
+def call_claude_api_stream(data, api_key, messages_history):
+    """Claude API 串流介面，支援多輪對話；generator 形式"""
+    try:
+        import anthropic
+    except ImportError:
+        yield "請先安裝套件：`pip install anthropic`"
+        return
+
+    context = _build_data_context(data)
+    system_prompt = (
+        "你是嗑肉石鍋火鍋連鎖餐飲業的專屬數據分析顧問，擁有豐富的餐飲業 KPI 分析與門店管理經驗。"
+        "請用繁體中文回覆，語氣專業但親切，善用條列格式，給出具體可行的建議。\n\n"
+        f"以下是最新營業數據供參考：\n{context}"
+    )
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
+        with client.messages.stream(
             model="claude-opus-4-7",
-            max_tokens=1500,
-            system="你是嗑肉石鍋火鍋連鎖餐飲業數據分析顧問，用繁體中文回覆，重點突出，給出具體建議。",
-            messages=[{"role": "user", "content": prompts.get(analysis_type, prompts["本月營收健康報告"])}],
-        )
-        return msg.content[0].text
+            max_tokens=2000,
+            system=system_prompt,
+            messages=messages_history,
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
     except Exception as e:
-        return f"API 呼叫失敗：{e}"
+        yield f"\n\n⚠️ API 呼叫失敗：{e}"
+
+
+# 快速問題清單
+_QUICK_QUESTIONS = [
+    "本月哪間門店表現最亮眼？原因為何？",
+    "哪些門店達標風險最高？給我具體改善行動清單",
+    "用表格幫我比較各區域本月業績",
+    "本週和上週相比，趨勢如何？",
+    "客單價最低的門店，如何提升？",
+    "請幫我寫一份給老闆的本月簡報摘要",
+]
 
 
 def page_ai_insights(data):
-    """AI 洞察"""
-    bsh("bi-robot", "AI 洞察分析")
-    tab1, tab2 = st.tabs(["規則引擎洞察", "Claude AI 進階分析"])
+    """AI 洞察 — 升級版"""
+
+    # ── AI 助理 Header ──
+    st.markdown("""
+<div class="ai-header">
+  <div class="ai-header-icon"><i class="bi bi-robot"></i></div>
+  <div class="ai-header-text">
+    <h3>AI 數據分析助理</h3>
+    <p>由 Claude Opus 驅動・嗑肉石鍋專屬顧問・支援多輪對話</p>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["🤖 AI 智慧對話", "📊 規則引擎洞察"])
 
     with tab1:
-        if st.button("重新分析", key="ai_refresh"):
-            st.cache_data.clear()
-            st.rerun()
-        insights = generate_rule_insights(data)
-        if not insights:
-            st.info("資料不足，無法產生洞察")
-            return
-        for ins in insights:
-            _insight_card(ins)
-
-    with tab2:
-        st.markdown("#### 使用 Claude AI 進行深度自然語言分析")
-
-        # 優先從 Streamlit Secrets 讀取，免去每次手動輸入
+        # ── API Key ──
         secret_key = ""
         try:
             secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
@@ -1192,32 +1705,120 @@ def page_ai_insights(data):
             pass
 
         if secret_key:
-            st.success("API Key 已從 Streamlit Secrets 自動載入。")
             api_key = secret_key
+            st.success("✅ API Key 已從 Streamlit Secrets 自動載入，可直接開始對話。", icon=None)
         else:
-            st.info(
-                "尚未設定 Secrets。請至 Streamlit Cloud → 你的 App → Settings → Secrets，"
-                "新增：`ANTHROPIC_API_KEY = \"sk-ant-...\"`，或在下方手動輸入。"
-            )
-            api_key = st.text_input(
-                "Anthropic API Key", type="password",
-                placeholder="sk-ant-...", key="claude_key",
-            )
+            with st.expander("🔑 設定 API Key", expanded=True):
+                st.info(
+                    "請至 Streamlit Cloud → Settings → Secrets 新增：\n"
+                    "`ANTHROPIC_API_KEY = \"sk-ant-...\"`，或在下方手動輸入。"
+                )
+                api_key = st.text_input(
+                    "Anthropic API Key", type="password",
+                    placeholder="sk-ant-...", key="claude_key",
+                )
 
-        atype = st.selectbox("分析類型", [
-            "本月營收健康報告",
-            "門店異常深度分析",
-            "改善建議（最差門店）",
-            "最佳實務萃取",
-        ], key="ai_type")
-        if st.button("開始 AI 分析", type="primary", key="ai_run"):
+        st.markdown('<div class="section-header"><i class="bi bi-lightning-charge-fill"></i><span>快速提問</span></div>', unsafe_allow_html=True)
+
+        # 快速問題按鈕（用 columns 排列）
+        if "pending_question" not in st.session_state:
+            st.session_state.pending_question = ""
+
+        cols_q = st.columns(3)
+        for i, q in enumerate(_QUICK_QUESTIONS):
+            with cols_q[i % 3]:
+                if st.button(q, key=f"qq_{i}", use_container_width=True):
+                    st.session_state.pending_question = q
+
+        st.markdown('<div class="section-header"><i class="bi bi-chat-dots-fill"></i><span>對話記錄</span></div>', unsafe_allow_html=True)
+
+        # ── 對話歷史 ──
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+
+        # 渲染對話氣泡
+        chat_html = '<div class="chat-wrap">'
+        if not st.session_state.chat_history:
+            chat_html += """
+<div class="empty-chat">
+  <i class="bi bi-chat-dots"></i>
+  <p>選擇快速提問或在下方輸入問題，開始與 AI 顧問對話</p>
+</div>"""
+        else:
+            for msg in st.session_state.chat_history:
+                role = msg["role"]
+                content = msg["content"].replace("\n", "<br>")
+                ts = msg.get("ts", "")
+                if role == "user":
+                    chat_html += f"""
+<div class="chat-row user-row">
+  <div class="chat-avatar user-av"><i class="bi bi-person-fill"></i></div>
+  <div>
+    <div class="chat-bubble user-bubble">{content}</div>
+    <div class="chat-meta">{ts}</div>
+  </div>
+</div>"""
+                else:
+                    chat_html += f"""
+<div class="chat-row">
+  <div class="chat-avatar ai-av"><i class="bi bi-robot"></i></div>
+  <div>
+    <div class="chat-bubble ai-bubble">{content}</div>
+    <div class="chat-meta">Claude Opus・{ts}</div>
+  </div>
+</div>"""
+        chat_html += "</div>"
+        st.markdown(f'<div class="chat-panel">{chat_html}</div>', unsafe_allow_html=True)
+
+        # ── 輸入區 ──
+        c_input, c_send, c_clear = st.columns([6, 1, 1])
+        with c_input:
+            default_val = st.session_state.pop("pending_question", "") if st.session_state.get("pending_question") else ""
+            user_input = st.text_input(
+                "問題", value=default_val,
+                placeholder="輸入你的問題，例如：本月哪間門店最需要立即關注？",
+                label_visibility="collapsed", key="chat_input",
+            )
+        with c_send:
+            send = st.button("送出", type="primary", use_container_width=True, key="chat_send")
+        with c_clear:
+            if st.button("清除", use_container_width=True, key="chat_clear"):
+                st.session_state.chat_history = []
+                st.rerun()
+
+        if send and user_input.strip():
             if not api_key:
                 st.error("請先設定 API Key")
             else:
-                with st.spinner("Claude AI 分析中（約 10～30 秒）..."):
-                    result = call_claude_api(data, api_key, atype)
-                st.markdown("---")
-                st.markdown(result)
+                now_str = datetime.now().strftime("%H:%M")
+                st.session_state.chat_history.append({"role": "user", "content": user_input.strip(), "ts": now_str})
+
+                api_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history]
+
+                with st.spinner("AI 顧問思考中…"):
+                    full_reply = ""
+                    try:
+                        for chunk in call_claude_api_stream(data, api_key, api_messages):
+                            full_reply += chunk
+                    except Exception as e:
+                        full_reply = f"發生錯誤：{e}"
+
+                st.session_state.chat_history.append({"role": "assistant", "content": full_reply, "ts": now_str})
+                st.rerun()
+
+    with tab2:
+        c_refresh, _ = st.columns([1, 4])
+        with c_refresh:
+            if st.button("重新分析", key="ai_refresh", use_container_width=True):
+                st.cache_data.clear()
+                st.rerun()
+
+        insights = generate_rule_insights(data)
+        if not insights:
+            st.info("資料不足，無法產生洞察")
+            return
+        for ins in insights:
+            _insight_card(ins)
 
 
 # ============================================================
@@ -1232,15 +1833,20 @@ def main():
         st.error("無法載入資料")
         return
 
-    # 側邊欄：垂直分頁選單
-    st.sidebar.markdown(
-        '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.25rem">'
-        '<i class="bi bi-cup-hot" style="font-size:1.4rem;color:#FF6B6B"></i>'
-        '<span style="font-size:1.15rem;font-weight:700">嗑肉石鍋</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    st.sidebar.caption(f"資料更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    # 側邊欄：品牌 Banner
+    st.sidebar.markdown(f"""
+<div class="sb-brand">
+  <div style="display:flex;align-items:center;gap:10px;position:relative;z-index:1">
+    <i class="bi bi-cup-hot-fill" style="font-size:1.6rem;color:#fff;opacity:.9"></i>
+    <div>
+      <div class="sb-brand-name">嗑肉石鍋</div>
+      <div class="sb-brand-sub">營收儀表板 · 即時數據</div>
+    </div>
+  </div>
+  <div style="margin-top:10px;font-size:.7rem;color:rgba(255,255,255,.6);position:relative;z-index:1">
+    <i class="bi bi-clock"></i> {datetime.now().strftime('%Y/%m/%d %H:%M')} 更新
+  </div>
+</div>""", unsafe_allow_html=True)
     st.sidebar.divider()
 
     pages = {
@@ -1276,18 +1882,30 @@ def main():
             wow = (yd_rev - db_rev) / db_rev * 100 if db_rev > 0 else 0
             arrow = "▲" if wow >= 0 else "▼"
             color = "#28a745" if wow >= 0 else "#dc3545"
-            st.sidebar.markdown('<strong><i class="bi bi-calendar-check"></i> 昨日摘要</strong>', unsafe_allow_html=True)
+            wow_cls = "up" if wow >= 0 else "dn"
+            wow_icon = "bi-arrow-up-short" if wow >= 0 else "bi-arrow-down-short"
             st.sidebar.markdown(f"""
-<div style="background:#f8f9fa;border-radius:8px;padding:10px 12px;font-size:0.82rem;">
-  <div style="font-weight:700;font-size:0.95rem;">{yesterday.strftime('%m/%d')} 全店</div>
-  <div><i class="bi bi-cash-coin"></i> {yd_rev/10000:.1f} 萬元 <span style="color:{color};font-weight:700;">{arrow}{abs(wow):.1f}%</span></div>
-  <div><i class="bi bi-people"></i> {yd_cust:,.0f} 人來客</div>
-  <div style="color:#888;font-size:0.75rem;">{yd['門店'].nunique()} 間門店有紀錄</div>
+<div style="font-size:.75rem;font-weight:800;color:#94A3B8;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">
+  <i class="bi bi-calendar-check-fill" style="color:#FF6B35"></i> 昨日摘要
+</div>
+<div class="yd-card">
+  <div class="yd-title">{yesterday.strftime('%m/%d')}（{WEEKDAY_MAP.get(yesterday.weekday(), '')}）全店</div>
+  <div class="yd-row">
+    <i class="bi bi-cash-coin" style="color:#FF6B35"></i>
+    <span class="yd-val">{yd_rev/10000:.1f} 萬元</span>
+    <span class="{wow_cls}"><i class="bi {wow_icon}"></i>{abs(wow):.1f}%</span>
+  </div>
+  <div class="yd-row">
+    <i class="bi bi-people-fill" style="color:#3B82F6"></i>
+    <span class="yd-val">{yd_cust:,.0f} 人</span>
+    <span style="color:#94A3B8;font-size:.75rem">{yd['門店'].nunique()} 間門店</span>
+  </div>
 </div>""", unsafe_allow_html=True)
             st.sidebar.divider()
 
-    # 匯出
-    if st.sidebar.button("重新載入資料"):
+    # 工具列
+    st.sidebar.markdown('<div style="font-size:.75rem;font-weight:800;color:#94A3B8;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">工具</div>', unsafe_allow_html=True)
+    if st.sidebar.button("🔄 重新載入資料", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -1302,10 +1920,22 @@ def main():
         return out.getvalue()
 
     st.sidebar.download_button(
-        label="匯出 Excel",
+        label="📥 匯出 Excel",
         data=to_excel(export_df),
         file_name=f"嗑肉石鍋_營收_{datetime.now().strftime('%Y%m%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+    # 版本資訊
+    st.sidebar.divider()
+    st.sidebar.markdown(
+        '<div style="font-size:.7rem;color:#CBD5E1;text-align:center;line-height:1.8">'
+        'Powered by <strong>Claude Opus</strong><br>'
+        '嗑肉石鍋 Dashboard v6.0<br>'
+        '<span style="color:#FF6B35">★ Premium Edition</span>'
+        '</div>',
+        unsafe_allow_html=True,
     )
 
     # 執行選中的分頁
