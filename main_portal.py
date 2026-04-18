@@ -95,6 +95,15 @@ st.markdown("""
         background-color: #C1320F !important;
         border-color: #C1320F !important;
     }
+    /* page_link 按鈕樣式 */
+    a[data-testid="stPageLink"] {
+        background: rgba(255,255,255,0.15) !important;
+        border: 2px solid rgba(255,255,255,0.5) !important;
+        color: white !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        transition: all 0.15s !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
