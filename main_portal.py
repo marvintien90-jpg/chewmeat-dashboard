@@ -72,6 +72,14 @@ st.markdown(f"""
         background: linear-gradient(145deg, #2C3E50 0%, #3D5A80 100%);
         box-shadow: 0 6px 24px rgba(44,62,80,0.28);
     }}
+    .module-card-brain {{
+        background: linear-gradient(145deg, #6C3483 0%, #9B59B6 100%);
+        box-shadow: 0 6px 24px rgba(108,52,131,0.28);
+    }}
+    .module-card-mkt {{
+        background: linear-gradient(145deg, #117A65 0%, #1ABC9C 100%);
+        box-shadow: 0 6px 24px rgba(17,122,101,0.28);
+    }}
     .module-card .icon {{ font-size: 3rem; display: block; margin-bottom: 0.6rem; }}
     .module-card h2 {{ font-size: 1.7rem; margin: 0.3rem 0; font-weight: 800; }}
     .module-card p  {{ font-size: 0.88rem; opacity: 0.88; line-height: 1.6; margin: 0; }}
@@ -141,8 +149,11 @@ def show_portal():
         st.caption("指揮中心")
         st.divider()
         st.markdown("### 🚪 快速進入")
-        st.page_link("pages/1_營收看板.py", label="📊 財務部 — 營收看板")
-        st.page_link("pages/2_專案進度.py", label="🗂️ 營運部 — 專案進度")
+        st.page_link("pages/1_營收看板.py",   label="📊 財務部 — 營收看板")
+        st.page_link("pages/2_專案進度.py",   label="🗂️ 營運部 — 專案進度")
+        st.page_link("pages/3_智能戰情室.py", label="🧠 指揮部 — 智能戰情室")
+        st.page_link("pages/5_品牌行銷部.py", label="🎨 行銷部 — 品牌行銷")
+        st.page_link("pages/6_市場情報部.py", label="🔍 情報部 — 市場情報")
         st.divider()
         if st.button("🔒 登出", use_container_width=True):
             st.session_state["authenticated"] = False
@@ -173,6 +184,39 @@ def show_portal():
         </div>
         """, unsafe_allow_html=True)
         st.page_link("pages/2_專案進度.py", label="→ 進入營運部（專案進度）", use_container_width=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    c3, c4, c5 = st.columns(3, gap="large")
+    with c3:
+        st.markdown("""
+        <div class="module-card module-card-brain">
+            <span class="icon">🧠</span>
+            <h2>智能戰情室</h2>
+            <p>跨部門連動診斷・偏差警示<br>逾期任務追蹤・白話報告</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.page_link("pages/3_智能戰情室.py", label="→ 進入指揮部（智能戰情室）", use_container_width=True)
+
+    with c4:
+        st.markdown("""
+        <div class="module-card module-card-mkt">
+            <span class="icon">🎨</span>
+            <h2>品牌行銷部</h2>
+            <p>活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.page_link("pages/5_品牌行銷部.py", label="→ 進入品牌行銷部", use_container_width=True)
+
+    with c5:
+        st.markdown("""
+        <div class="module-card">
+            <span class="icon">🔍</span>
+            <h2>市場情報部</h2>
+            <p>競品價格區間・服務雷達圖<br>市場定位分析・情報研判</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.page_link("pages/6_市場情報部.py", label="→ 進入市場情報部", use_container_width=True)
 
 
 # ============================================================
