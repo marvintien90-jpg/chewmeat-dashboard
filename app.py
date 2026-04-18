@@ -165,10 +165,14 @@ def load_sheet(year_month, gid):
 
     df = pd.DataFrame(rows)
     pivot = df.pivot_table(
-        index=["日期", "區域", "門店", "本月目標", "達成率"],
+        index=["日期", "區域", "門店"],
         columns="指標", values="數值", aggfunc="first",
     ).reset_index()
     pivot.columns.name = None
+
+    # 本月目標/達成率單獨 join，避免 NaN index 導致門店被 pivot_table 過濾掉
+    tr = df.groupby(["日期", "區域", "門店"])[["本月目標", "達成率"]].first().reset_index()
+    pivot = pivot.merge(tr, on=["日期", "區域", "門店"], how="left")
 
     ren = {}
     if "業績合計" in pivot.columns: ren["業績合計"] = "營業額"
@@ -956,6 +960,213 @@ def make_dual_axis(daily):
 
 
 # ============================================================
+# AI 洞察：規則引擎
+# ============================================================
+def generate_rule_insights(data):
+    """規則引擎：分析數據並生成文字洞察列表"""
+    insights = []
+    valid = data[data["營業額"].notna() & (data["營業額"] > 0)]
+    if valid.empty:
+        return insights
+
+    today = valid["日期"].max().date()
+    yesterday = today - timedelta(days=1)
+    yr, mn = today.year, today.month
+    days_in_month = calendar.monthrange(yr, mn)[1]
+    day_of_month = today.day
+
+    # 1. 昨日摘要
+    yd = valid[valid["日期"].dt.date == yesterday]
+    if not yd.empty:
+        yd_rev = yd["營業額"].sum()
+        yd_cust = yd["來客數"].sum()
+        yd_stores = yd["門店"].nunique()
+        day_before = yesterday - timedelta(days=1)
+        db = valid[valid["日期"].dt.date == day_before]
+        db_rev = db["營業額"].sum() if not db.empty else 0
+        change = (yd_rev - db_rev) / db_rev * 100 if db_rev > 0 else None
+        change_text = f"，較前日 {change:+.1f}%" if change is not None else ""
+        insights.append({
+            "category": "昨日摘要", "icon": "📊", "level": "info",
+            "title": f"昨日（{yesterday.strftime('%m/%d')}）全店營業額 {yd_rev/10000:.1f} 萬元",
+            "detail": f"來客 {yd_cust:,.0f} 人，{yd_stores} 間門店有營業紀錄{change_text}",
+        })
+        top_store_s = yd.groupby("門店")["營業額"].sum()
+        top_store = top_store_s.idxmax()
+        top_rev = top_store_s.max()
+        insights.append({
+            "category": "昨日之星", "icon": "🏆", "level": "success",
+            "title": f"昨日冠軍：{top_store}",
+            "detail": f"營業額 {top_rev:,.0f} 元",
+        })
+
+    # 2. 本月達標概況
+    cur = valid[(valid["日期"].dt.year == yr) & (valid["日期"].dt.month == mn)]
+    cur_active = cur[~cur["門店"].isin(CLOSED_STORES)]
+    if not cur_active.empty:
+        sp = cur_active.groupby("門店").agg(
+            actual=("營業額", "sum"),
+            days=("日期", "nunique"),
+            target=("本月目標", "first"),
+        ).reset_index()
+        sp = sp[sp["target"].notna() & (sp["target"] > 0)]
+        if not sp.empty:
+            sp["projected"] = sp["actual"] / sp["days"] * days_in_month
+            sp["proj_rate"] = sp["projected"] / sp["target"] * 100
+            danger = sp[sp["proj_rate"] < 85]
+            on_track = sp[sp["proj_rate"] >= 100]
+            insights.append({
+                "category": "達標概況", "icon": "🎯", "level": "info",
+                "title": f"本月預估：{len(on_track)} 間可達標 / {len(danger)} 間高風險",
+                "detail": f"月份進度 {day_of_month}/{days_in_month} 天（{day_of_month/days_in_month*100:.0f}%）",
+            })
+            if not danger.empty:
+                names = "、".join(danger.sort_values("proj_rate")["門店"].tolist())
+                insights.append({
+                    "category": "達標預警", "icon": "🔴", "level": "error",
+                    "title": f"以下 {len(danger)} 間門店達標率預估不足 85%",
+                    "detail": names,
+                })
+
+    # 3. 連續 3 天低於日均目標
+    recent = valid[valid["日期"].dt.date >= (today - timedelta(days=6))].copy()
+    if not recent.empty:
+        recent["日均目標"] = recent["本月目標"] / recent["日期"].apply(
+            lambda x: calendar.monthrange(x.year, x.month)[1]
+        )
+        recent = recent[recent["日均目標"].notna() & (recent["日均目標"] > 0)]
+        recent["未達標"] = recent["營業額"] < recent["日均目標"]
+        cons = (
+            recent.sort_values("日期")
+            .groupby("門店")["未達標"]
+            .apply(lambda s: s.tail(3).all())
+            .reset_index(name="連續未達")
+        )
+        bad = cons[cons["連續未達"]]["門店"].tolist()
+        if bad:
+            insights.append({
+                "category": "連續警示", "icon": "⚠️", "level": "warning",
+                "title": f"{len(bad)} 間門店連續 3 天低於日均目標",
+                "detail": "、".join(bad),
+            })
+
+    # 4. 週環比
+    week_sum = valid.groupby("年週")["營業額"].sum().reset_index().sort_values("年週")
+    if len(week_sum) >= 2:
+        this_w = week_sum.iloc[-1]["營業額"]
+        last_w = week_sum.iloc[-2]["營業額"]
+        wow = (this_w - last_w) / last_w * 100 if last_w > 0 else 0
+        insights.append({
+            "category": "週環比", "icon": "📈" if wow >= 0 else "📉",
+            "level": "success" if wow >= 0 else "warning",
+            "title": f"本週較上週 {wow:+.1f}%",
+            "detail": f"本週 {this_w/10000:.1f} 萬 vs 上週 {last_w/10000:.1f} 萬",
+        })
+
+    # 5. 客單價異常（低於近 30 日平均 15%）
+    recent30 = valid[valid["日期"].dt.date >= (today - timedelta(days=30))]
+    if not recent30.empty and not yd.empty:
+        avg_aov = recent30["客單價"].mean()
+        yd_aov = yd["客單價"].mean()
+        if pd.notna(avg_aov) and pd.notna(yd_aov) and avg_aov > 0:
+            drop = (avg_aov - yd_aov) / avg_aov * 100
+            if drop > 15:
+                insights.append({
+                    "category": "客單價警示", "icon": "💸", "level": "warning",
+                    "title": f"昨日客單價較近 30 日均低 {drop:.1f}%",
+                    "detail": f"昨日 {yd_aov:,.0f} 元 vs 近期均值 {avg_aov:,.0f} 元",
+                })
+
+    return insights
+
+
+def _insight_card(ins):
+    """渲染單張洞察卡片"""
+    bg = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#d1ecf1"}.get(ins["level"], "#f8f9fa")
+    border = {"success": "#28a745", "error": "#dc3545", "warning": "#e6a817", "info": "#17a2b8"}.get(ins["level"], "#6c757d")
+    st.markdown(f"""
+<div style="background:{bg};border-left:4px solid {border};padding:12px 16px;border-radius:8px;margin-bottom:10px;">
+  <div style="font-size:0.7rem;color:#666;font-weight:700;text-transform:uppercase;margin-bottom:3px;">{ins['icon']} {ins['category']}</div>
+  <div style="font-size:0.95rem;font-weight:700;color:#222;margin-bottom:3px;">{ins['title']}</div>
+  <div style="font-size:0.82rem;color:#555;">{ins['detail']}</div>
+</div>""", unsafe_allow_html=True)
+
+
+def call_claude_api(data, api_key, analysis_type):
+    """Claude API 介面"""
+    try:
+        import anthropic
+    except ImportError:
+        return "⚠️ 請先安裝套件：`pip install anthropic`"
+
+    valid = data[data["營業額"].notna() & (data["營業額"] > 0)]
+    today = valid["日期"].max().date()
+    yr, mn = today.year, today.month
+
+    monthly = valid[(valid["日期"].dt.year == yr) & (valid["日期"].dt.month == mn)]
+    sp = monthly.groupby("門店").agg(
+        營業額=("營業額", "sum"), 來客數=("來客數", "sum"), 本月目標=("本月目標", "first"),
+    ).reset_index()
+    sp["達成率%"] = (sp["營業額"] / sp["本月目標"] * 100).round(1)
+    summary = sp.to_string(index=False)
+
+    prompts = {
+        "本月營收健康報告": f"請為以下嗑肉石鍋 {yr}年{mn}月 門店數據撰寫一份營收健康報告，指出亮點與問題：\n{summary}",
+        "門店異常深度分析": f"分析以下門店數據，找出異常表現的門店並解釋可能原因：\n{summary}",
+        "改善建議（最差門店）": f"針對以下達成率最低的門店，提供 3 條具體可行的改善建議：\n{summary}",
+        "最佳實務萃取": f"從以下高達成率門店，萃取可複製的成功模式供其他門店參考：\n{summary}",
+    }
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-opus-4-7",
+            max_tokens=1500,
+            system="你是嗑肉石鍋火鍋連鎖餐飲業數據分析顧問，用繁體中文回覆，重點突出，給出具體建議。",
+            messages=[{"role": "user", "content": prompts.get(analysis_type, prompts["本月營收健康報告"])}],
+        )
+        return msg.content[0].text
+    except Exception as e:
+        return f"❌ API 呼叫失敗：{e}"
+
+
+def page_ai_insights(data):
+    """🤖 AI 洞察"""
+    st.header("🤖 AI 洞察分析")
+    tab1, tab2 = st.tabs(["📋 規則引擎洞察", "🔮 Claude AI 進階分析"])
+
+    with tab1:
+        if st.button("🔄 重新分析", key="ai_refresh"):
+            st.cache_data.clear()
+            st.rerun()
+        insights = generate_rule_insights(data)
+        if not insights:
+            st.info("資料不足，無法產生洞察")
+            return
+        for ins in insights:
+            _insight_card(ins)
+
+    with tab2:
+        st.markdown("#### 使用 Claude AI 進行深度自然語言分析")
+        st.info("輸入 Anthropic API Key 後即可啟用，Key 僅用於當次請求，不會被儲存。")
+        api_key = st.text_input("Anthropic API Key", type="password", placeholder="sk-ant-...", key="claude_key")
+        atype = st.selectbox("分析類型", [
+            "本月營收健康報告",
+            "門店異常深度分析",
+            "改善建議（最差門店）",
+            "最佳實務萃取",
+        ], key="ai_type")
+        if st.button("🚀 開始 AI 分析", type="primary", key="ai_run"):
+            if not api_key:
+                st.error("請輸入 Anthropic API Key")
+            else:
+                with st.spinner("Claude AI 分析中（約 10～30 秒）..."):
+                    result = call_claude_api(data, api_key, atype)
+                st.markdown("---")
+                st.markdown(result)
+
+
+# ============================================================
 # 主程式
 # ============================================================
 def main():
@@ -974,6 +1185,7 @@ def main():
 
     pages = {
         "📊 總覽": page_overview,
+        "🤖 AI 洞察": page_ai_insights,
         "🏪 門店排行": page_store_rank,
         "🔄 店對店比較": page_store_compare,
         "📅 週循環分析": page_cycle_week,
@@ -989,6 +1201,30 @@ def main():
     selected = st.sidebar.radio("功能選單", list(pages.keys()), label_visibility="collapsed")
 
     st.sidebar.divider()
+
+    # 昨日摘要 sidebar widget
+    valid_all = data[data["營業額"].notna() & (data["營業額"] > 0)]
+    if not valid_all.empty:
+        latest = valid_all["日期"].max().date()
+        yesterday = latest - timedelta(days=1)
+        yd = valid_all[valid_all["日期"].dt.date == yesterday]
+        if not yd.empty:
+            yd_rev = yd["營業額"].sum()
+            yd_cust = yd["來客數"].sum()
+            db = valid_all[valid_all["日期"].dt.date == (yesterday - timedelta(days=1))]
+            db_rev = db["營業額"].sum() if not db.empty else 0
+            wow = (yd_rev - db_rev) / db_rev * 100 if db_rev > 0 else 0
+            arrow = "▲" if wow >= 0 else "▼"
+            color = "#28a745" if wow >= 0 else "#dc3545"
+            st.sidebar.markdown("**📋 昨日摘要**")
+            st.sidebar.markdown(f"""
+<div style="background:#f8f9fa;border-radius:8px;padding:10px 12px;font-size:0.82rem;">
+  <div style="font-weight:700;font-size:0.95rem;">{yesterday.strftime('%m/%d')} 全店</div>
+  <div>💰 {yd_rev/10000:.1f} 萬元 <span style="color:{color};font-weight:700;">{arrow}{abs(wow):.1f}%</span></div>
+  <div>👥 {yd_cust:,.0f} 人來客</div>
+  <div style="color:#888;font-size:0.75rem;">{yd['門店'].nunique()} 間門店有紀錄</div>
+</div>""", unsafe_allow_html=True)
+            st.sidebar.divider()
 
     # 匯出
     if st.sidebar.button("🔄 重新載入資料"):
