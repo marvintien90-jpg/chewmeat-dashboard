@@ -770,60 +770,85 @@ def page_target(data):
 
     st.info(f"基準日：{today.strftime('%Y-%m-%d')}（資料最新日） ｜ 進度 {day_of_month}/{days_in_month} 天（{day_of_month/days_in_month*100:.0f}%）")
 
-    cur = data[(data["日期"].dt.year == yr) & (data["日期"].dt.month == mn)]
-    cur = cur[cur["營業額"].notna() & (cur["營業額"] > 0)]
-    # 排除已結村門店
-    cur = cur[~cur["門店"].isin(CLOSED_STORES)]
+    # 所有歷史資料中出現過的非結村門店 → 主控清單（不因月份缺資料而消失）
+    master = (data[~data["門店"].isin(CLOSED_STORES)]
+              .groupby("門店")["區域"].first()
+              .reset_index())
 
-    if cur.empty:
-        st.warning("本月尚無資料")
-        return
+    cur = data[
+        (data["日期"].dt.year == yr) & (data["日期"].dt.month == mn)
+        & ~data["門店"].isin(CLOSED_STORES)
+    ]
+    cur_valid = cur[cur["營業額"].notna() & (cur["營業額"] > 0)]
 
-    store_progress = cur.groupby(["區域", "門店"]).agg({
-        "營業額": "sum", "來客數": "sum", "本月目標": "first",
-    }).reset_index()
-    store_progress["已營業天數"] = cur.groupby("門店")["日期"].nunique().values
-    store_progress["日均實際"] = (store_progress["營業額"] / store_progress["已營業天數"]).round(0)
-    store_progress["預估月營收"] = (store_progress["日均實際"] * days_in_month).round(0)
-    store_progress["預估達成率"] = (store_progress["預估月營收"] / store_progress["本月目標"] * 100).round(1)
-    store_progress["目前達成率"] = (store_progress["營業額"] / store_progress["本月目標"] * 100).round(1)
-    store_progress["狀態"] = store_progress["預估達成率"].apply(
-        lambda x: "可達標" if x >= 100 else ("略低" if x >= 85 else "危險")
+    if not cur_valid.empty:
+        sp = cur_valid.groupby("門店").agg(
+            營業額=("營業額", "sum"),
+            來客數=("來客數", "sum"),
+            本月目標=("本月目標", "first"),
+        ).reset_index()
+        day_cnt = cur_valid.groupby("門店")["日期"].nunique().rename("已營業天數").reset_index()
+        sp = sp.merge(day_cnt, on="門店", how="left")
+    else:
+        sp = pd.DataFrame(columns=["門店", "營業額", "來客數", "本月目標", "已營業天數"])
+
+    # left join：所有門店皆出現，缺資料者填 0 / NaN
+    store_progress = master.merge(sp, on="門店", how="left")
+    store_progress["已營業天數"] = store_progress["已營業天數"].fillna(0).astype(int)
+    store_progress["營業額"] = store_progress["營業額"].fillna(0)
+    store_progress["來客數"] = store_progress["來客數"].fillna(0)
+
+    store_progress["日均實際"] = store_progress.apply(
+        lambda r: round(r["營業額"] / r["已營業天數"], 0) if r["已營業天數"] > 0 else 0, axis=1
     )
-    store_progress = store_progress.sort_values("預估達成率", ascending=False)
+    store_progress["預估月營收"] = (store_progress["日均實際"] * days_in_month).round(0)
+    store_progress["預估達成率"] = store_progress.apply(
+        lambda r: round(r["預估月營收"] / r["本月目標"] * 100, 1)
+        if pd.notna(r["本月目標"]) and r["本月目標"] > 0 else None, axis=1
+    )
+    store_progress["目前達成率"] = store_progress.apply(
+        lambda r: round(r["營業額"] / r["本月目標"] * 100, 1)
+        if pd.notna(r["本月目標"]) and r["本月目標"] > 0 else None, axis=1
+    )
+    store_progress["狀態"] = store_progress["預估達成率"].apply(
+        lambda x: "可達標" if pd.notna(x) and x >= 100 else ("略低" if pd.notna(x) and x >= 85 else "危險")
+    )
+    store_progress = store_progress.sort_values("預估達成率", ascending=False, na_position="last")
 
+    ok_mask = store_progress["預估達成率"].notna()
     c1, c2, c3 = st.columns(3)
-    c1.metric("預估可達標", f"{len(store_progress[store_progress['預估達成率'] >= 100])} 店")
-    c2.metric("預估危險", f"{len(store_progress[store_progress['預估達成率'] < 85])} 店")
+    c1.metric("預估可達標", f"{(ok_mask & (store_progress['預估達成率'] >= 100)).sum()} 店")
+    c2.metric("預估危險",
+              f"{(ok_mask & (store_progress['預估達成率'] < 85)).sum() + (~ok_mask).sum()} 店")
     c3.metric("本月剩餘天數", f"{days_in_month - day_of_month} 天")
 
-    # 達成率儀表板 bar chart
-    fig = go.Figure()
-    colors = [
-        "#44BB44" if r >= 100 else ("#FFaa00" if r >= 85 else "#FF4444")
-        for r in store_progress["預估達成率"]
+    rates = store_progress["預估達成率"].fillna(0)
+    colors = ["#44BB44" if r >= 100 else ("#FFaa00" if r >= 85 else "#FF4444") for r in rates]
+    labels = [
+        f"{r_orig:.0f}%" if pd.notna(r_orig) else "無資料"
+        for r_orig in store_progress["預估達成率"]
     ]
+    fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=store_progress["門店"], y=store_progress["預估達成率"],
-        marker_color=colors,
-        text=[f"{r:.0f}%" for r in store_progress["預估達成率"]],
-        textposition="outside",
+        x=store_progress["門店"], y=rates,
+        marker_color=colors, text=labels, textposition="outside",
         hovertemplate="%{x}<br>預估達成率：%{y:.1f}%<extra></extra>",
     ))
     fig.add_hline(y=100, line_dash="dash", line_color="red", annotation_text="目標 100%")
-    fig.update_layout(title=f"{yr}年{mn}月 各門店預估達成率",
-                      height=450, xaxis_tickangle=-45,
-                      yaxis_title="預估達成率（%）")
+    fig.update_layout(
+        title=f"{yr}年{mn}月 各門店預估達成率（{len(store_progress)} 間）",
+        height=480, xaxis_tickangle=-45, yaxis_title="預估達成率（%）",
+    )
     plotly_chart(fig, key="tg_bar")
 
     disp = store_progress[["區域", "門店", "營業額", "本月目標", "目前達成率",
                             "日均實際", "預估月營收", "預估達成率", "狀態"]].copy()
-    disp["營業額"] = disp["營業額"].apply(lambda x: f"{x:,.0f} 元")
+    disp["營業額"] = disp["營業額"].apply(lambda x: f"{x:,.0f} 元" if x > 0 else "—")
     disp["本月目標"] = disp["本月目標"].apply(lambda x: f"{x:,.0f} 元" if pd.notna(x) else "—")
-    disp["日均實際"] = disp["日均實際"].apply(lambda x: f"{x:,.0f} 元")
-    disp["預估月營收"] = disp["預估月營收"].apply(lambda x: f"{x:,.0f} 元")
-    disp["目前達成率"] = disp["目前達成率"].apply(lambda x: f"{x:.1f}%")
-    disp["預估達成率"] = disp["預估達成率"].apply(lambda x: f"{x:.1f}%")
+    disp["日均實際"] = disp["日均實際"].apply(lambda x: f"{x:,.0f} 元" if x > 0 else "—")
+    disp["預估月營收"] = disp["預估月營收"].apply(lambda x: f"{x:,.0f} 元" if x > 0 else "—")
+    disp["目前達成率"] = disp["目前達成率"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+    disp["預估達成率"] = disp["預估達成率"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
     st.dataframe(disp, use_container_width=True, hide_index=True)
 
 
@@ -1158,8 +1183,27 @@ def page_ai_insights(data):
 
     with tab2:
         st.markdown("#### 使用 Claude AI 進行深度自然語言分析")
-        st.info("輸入 Anthropic API Key 後即可啟用，Key 僅用於當次請求，不會被儲存。")
-        api_key = st.text_input("Anthropic API Key", type="password", placeholder="sk-ant-...", key="claude_key")
+
+        # 優先從 Streamlit Secrets 讀取，免去每次手動輸入
+        secret_key = ""
+        try:
+            secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+        except Exception:
+            pass
+
+        if secret_key:
+            st.success("API Key 已從 Streamlit Secrets 自動載入。")
+            api_key = secret_key
+        else:
+            st.info(
+                "尚未設定 Secrets。請至 Streamlit Cloud → 你的 App → Settings → Secrets，"
+                "新增：`ANTHROPIC_API_KEY = \"sk-ant-...\"`，或在下方手動輸入。"
+            )
+            api_key = st.text_input(
+                "Anthropic API Key", type="password",
+                placeholder="sk-ant-...", key="claude_key",
+            )
+
         atype = st.selectbox("分析類型", [
             "本月營收健康報告",
             "門店異常深度分析",
@@ -1168,7 +1212,7 @@ def page_ai_insights(data):
         ], key="ai_type")
         if st.button("開始 AI 分析", type="primary", key="ai_run"):
             if not api_key:
-                st.error("請輸入 Anthropic API Key")
+                st.error("請先設定 API Key")
             else:
                 with st.spinner("Claude AI 分析中（約 10～30 秒）..."):
                     result = call_claude_api(data, api_key, atype)
