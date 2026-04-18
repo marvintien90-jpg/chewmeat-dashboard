@@ -1,3 +1,11 @@
+"""
+營運部 — 專案進度
+資料來源：Google Sheets（與總部專案追蹤助理相同後端）
+"""
+from __future__ import annotations
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -11,65 +19,51 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ============================================================
+# ──────────────────────────────────────────────
 # 門禁驗證
-# ============================================================
+# ──────────────────────────────────────────────
 if not st.session_state.get("authenticated", False):
     st.error("🔒 尚未通過身份驗證，請返回總部登入")
     st.page_link("app.py", label="← 返回數位總部大門", use_container_width=False)
     st.stop()
 
-# ============================================================
-# 圖 B 風格 CSS（深藍/橘紅雙主色 × 白底 × 全中文）
-# ============================================================
+# ──────────────────────────────────────────────
+# CSS
+# ──────────────────────────────────────────────
 st.markdown("""
 <style>
     .main .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
+    [data-testid="stSidebarNav"] {display: none !important;}
+    [data-testid="stSidebar"] {background: #FAFAFA;}
 
-    /* KPI 卡片 */
     [data-testid="stMetric"] {
-        background: #FFFFFF;
-        padding: 14px;
-        border-radius: 10px;
+        background: #FFFFFF; padding: 14px; border-radius: 10px;
         border: 1.5px solid #E8EEF4;
         box-shadow: 0 1px 4px rgba(44,62,80,0.07);
     }
     [data-testid="stMetricLabel"] {font-size: 0.85rem; color: #888;}
     [data-testid="stMetricValue"] {font-size: 1.5rem; font-weight: 700; color: #1A1A1A;}
 
-    /* 區塊標題 — 深藍扁平 */
     .section-header {
-        background: #2C3E50;
-        color: white;
-        padding: 7px 16px;
-        border-radius: 8px;
-        margin: 1rem 0 0.5rem 0;
-        font-weight: 700;
-        font-size: 0.95rem;
+        background: #2C3E50; color: white;
+        padding: 7px 16px; border-radius: 8px;
+        margin: 1rem 0 0.5rem 0; font-weight: 700; font-size: 0.95rem;
     }
     .section-header-orange {
-        background: #E63B1F;
-        color: white;
-        padding: 7px 16px;
-        border-radius: 8px;
-        margin: 1rem 0 0.5rem 0;
-        font-weight: 700;
-        font-size: 0.95rem;
+        background: #E63B1F; color: white;
+        padding: 7px 16px; border-radius: 8px;
+        margin: 1rem 0 0.5rem 0; font-weight: 700; font-size: 0.95rem;
     }
 
-    /* 專案卡片 */
     .proj-card {
-        background: #FFFFFF;
-        border: 1.5px solid #E8EEF4;
-        border-radius: 12px;
-        padding: 1rem 1.2rem;
-        margin-bottom: 0.8rem;
-        border-left: 5px solid #2C3E50;
+        background: #FFFFFF; border: 1.5px solid #E8EEF4;
+        border-radius: 12px; padding: 1rem 1.2rem;
+        margin-bottom: 0.8rem; border-left: 5px solid #2C3E50;
         box-shadow: 0 2px 8px rgba(0,0,0,0.04);
     }
     .proj-card.urgent { border-left-color: #E63B1F; }
     .proj-card.done   { border-left-color: #27AE60; opacity: 0.85; }
-    .proj-card.hold   { border-left-color: #95A5A6; opacity: 0.75; }
+    .proj-card.overdue{ border-left-color: #F39C12; }
 
     .proj-title { font-size: 1rem; font-weight: 700; color: #1A1A1A; margin: 0 0 0.3rem 0; }
     .proj-meta  { font-size: 0.78rem; color: #888; line-height: 1.7; }
@@ -78,375 +72,278 @@ st.markdown("""
     .tag-executing { background: #EBF5FB; color: #2980B9; }
     .tag-planning  { background: #FFF3CD; color: #856404; }
     .tag-done      { background: #D5F5E3; color: #1E8449; }
-    .tag-hold      { background: #F2F3F4; color: #717D7E; }
+    .tag-overdue   { background: #FDEBD0; color: #D35400; }
 
-    /* 進度條容器 */
-    .progress-wrap { margin-top: 0.5rem; }
     .progress-bar-bg {
-        background: #F0F0F0; border-radius: 6px; height: 8px; width: 100%; margin-top: 3px;
+        background: #F0F0F0; border-radius: 6px; height: 8px;
+        width: 100%; margin-top: 4px;
     }
     .progress-bar-fill {
         background: linear-gradient(90deg, #2C3E50, #3D5A80);
         border-radius: 6px; height: 8px;
     }
-    .progress-bar-fill.urgent { background: linear-gradient(90deg, #E63B1F, #FF7043); }
-    .progress-bar-fill.done   { background: linear-gradient(90deg, #27AE60, #52BE80); }
+    .progress-bar-fill.done { background: linear-gradient(90deg, #27AE60, #52BE80); }
+    .progress-bar-fill.overdue { background: linear-gradient(90deg, #F39C12, #F8C471); }
 
-    /* 側邊欄 */
-    [data-testid="stSidebar"] {background: #FAFAFA;}
-    [data-testid="stSidebarNav"] {display: none !important;}
+    .error-box {
+        background: #FFF3EE; border-left: 4px solid #E63B1F;
+        padding: 14px 18px; border-radius: 10px; margin: 1rem 0;
+        font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-
-# ============================================================
-# 專案資料（示範資料，可替換為 Google Sheets 資料源）
-# ============================================================
-PROJECTS = [
-    {
-        "編號": "P-2026-001", "名稱": "2026 Q2 全台門店優化計畫",
-        "部門": "營運部", "負責人": "王總監",
-        "狀態": "執行中", "優先級": "高",
-        "開始日": "2026-04-01", "截止日": "2026-06-30",
-        "進度": 35, "標籤": "門店優化",
-        "說明": "針對 15 間門店進行服務流程優化，提升翻桌率與客戶滿意度",
-    },
-    {
-        "編號": "P-2026-002", "名稱": "台中逢甲新店開幕準備",
-        "部門": "展店部", "負責人": "陳副理",
-        "狀態": "執行中", "優先級": "緊急",
-        "開始日": "2026-03-15", "截止日": "2026-05-15",
-        "進度": 68, "標籤": "展店",
-        "說明": "台中逢甲商圈新店裝潢、設備採購、人員招募及試營運規劃",
-    },
-    {
-        "編號": "P-2026-003", "名稱": "POS 系統全台升級",
-        "部門": "資訊部", "負責人": "李工程師",
-        "狀態": "執行中", "優先級": "高",
-        "開始日": "2026-02-01", "截止日": "2026-07-31",
-        "進度": 50, "標籤": "資訊系統",
-        "說明": "導入新一代 POS 系統，整合線上訂位、外送平台與會員系統",
-    },
-    {
-        "編號": "P-2026-004", "名稱": "2026 五月母親節行銷活動",
-        "部門": "行銷部", "負責人": "林行銷長",
-        "狀態": "規劃中", "優先級": "高",
-        "開始日": "2026-04-20", "截止日": "2026-05-12",
-        "進度": 15, "標籤": "行銷活動",
-        "說明": "母親節限定套餐設計、社群媒體宣傳、門店佈置與員工培訓",
-    },
-    {
-        "編號": "P-2026-005", "名稱": "菜單 2.0 改版計畫",
-        "部門": "研發部", "負責人": "廚藝總監",
-        "狀態": "規劃中", "優先級": "中",
-        "開始日": "2026-05-01", "截止日": "2026-08-31",
-        "進度": 5, "標籤": "產品研發",
-        "說明": "引入季節性食材，調整 30% 菜色，強化健康輕食選項",
-    },
-    {
-        "編號": "P-2026-006", "名稱": "Q1 員工教育訓練計畫",
-        "部門": "人資部", "負責人": "人資主任",
-        "狀態": "已完成", "優先級": "中",
-        "開始日": "2026-01-15", "截止日": "2026-03-31",
-        "進度": 100, "標籤": "人才培育",
-        "說明": "全台員工服務禮儀、食安認證、緊急應變訓練，共 320 人次完訓",
-    },
-    {
-        "編號": "P-2026-007", "名稱": "供應鏈整合與成本優化",
-        "部門": "採購部", "負責人": "採購經理",
-        "狀態": "執行中", "優先級": "高",
-        "開始日": "2026-03-01", "截止日": "2026-09-30",
-        "進度": 28, "標籤": "供應鏈",
-        "說明": "整合 3 家核心供應商，目標降低食材採購成本 12%",
-    },
-    {
-        "編號": "P-2026-008", "名稱": "會員忠誠度計畫升級",
-        "部門": "行銷部", "負責人": "數位行銷師",
-        "狀態": "暫緩", "優先級": "低",
-        "開始日": "2026-06-01", "截止日": "2026-10-31",
-        "進度": 0, "標籤": "會員經營",
-        "說明": "等待 POS 系統升級完成後，配合推出積分制會員系統",
-    },
-    {
-        "編號": "P-2026-009", "名稱": "2025 年報與稅務申報",
-        "部門": "財務部", "負責人": "財務長",
-        "狀態": "已完成", "優先級": "緊急",
-        "開始日": "2026-02-01", "截止日": "2026-04-10",
-        "進度": 100, "標籤": "財務合規",
-        "說明": "2025 全年財務審計、稅務申報及股東報告書編製",
-    },
-    {
-        "編號": "P-2026-010", "名稱": "高雄楠梓新店評估",
-        "部門": "展店部", "負責人": "展店副理",
-        "狀態": "規劃中", "優先級": "中",
-        "開始日": "2026-04-15", "截止日": "2026-06-30",
-        "進度": 10, "標籤": "展店",
-        "說明": "評估高雄楠梓區商圈可行性，包含市場調查、租金談判及競品分析",
-    },
-]
+# ──────────────────────────────────────────────
+# 資料載入（接 Google Sheets 後端）
+# ──────────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def load_tasks_from_sheets():
+    try:
+        from lib.sheets_db import load_tasks
+        return load_tasks(), None
+    except Exception as e:
+        return [], str(e)
 
 
-@st.cache_data(ttl=300)
-def get_projects():
-    return pd.DataFrame(PROJECTS)
+def derive_status(row: dict, today: date) -> str:
+    prog = int(row.get("progress", 0))
+    if prog >= 100:
+        return "已完成"
+    end_str = str(row.get("when_end", "")).strip()
+    if end_str:
+        try:
+            end_date = datetime.strptime(end_str, "%Y-%m-%d").date()
+            if end_date < today:
+                return "逾期"
+        except ValueError:
+            pass
+    start_str = str(row.get("when_start", "")).strip()
+    if start_str:
+        try:
+            start_date = datetime.strptime(start_str, "%Y-%m-%d").date()
+            if start_date <= today:
+                return "執行中"
+        except ValueError:
+            pass
+    return "規劃中"
 
 
-# ============================================================
-# 工具函數
-# ============================================================
-STATUS_MAP = {
-    "執行中": ("tag-executing", "▶"),
-    "規劃中": ("tag-planning", "📋"),
-    "已完成": ("tag-done", "✅"),
-    "暫緩": ("tag-hold", "⏸"),
-}
-
-PRIORITY_COLOR = {"緊急": "#E63B1F", "高": "#E67E22", "中": "#2980B9", "低": "#7F8C8D"}
-
-CARD_CLASS = {
-    "執行中": "proj-card",
-    "規劃中": "proj-card",
-    "已完成": "proj-card done",
-    "暫緩": "proj-card hold",
-}
-
-FILL_CLASS = {
-    "執行中": "progress-bar-fill",
-    "規劃中": "progress-bar-fill",
-    "已完成": "progress-bar-fill done",
-    "暫緩": "progress-bar-fill",
-}
+def tasks_to_df(tasks: list[dict]) -> pd.DataFrame:
+    today = date.today()
+    rows = []
+    for t in tasks:
+        status = derive_status(t, today)
+        rows.append({
+            "編號":   t.get("task_id", "")[:8],
+            "名稱":   t.get("what", "（無標題）"),
+            "目標":   t.get("why", ""),
+            "部門":   t.get("who_dept", "—"),
+            "負責人":  t.get("who_person", "—"),
+            "開始日":  t.get("when_start", ""),
+            "截止日":  t.get("when_end", ""),
+            "進度":   int(t.get("progress", 0)),
+            "狀態":   status,
+            "說明":   t.get("how", ""),
+            "來源檔": t.get("source_file", ""),
+            "_task_id": t.get("task_id", ""),
+        })
+    return pd.DataFrame(rows)
 
 
-def priority_badge(p):
-    c = PRIORITY_COLOR.get(p, "#888")
-    return f'<span style="background:{c};color:white;padding:2px 8px;border-radius:20px;font-size:0.72rem;font-weight:700">{p}</span>'
-
-
-def render_project_card(row):
-    tag_cls, tag_icon = STATUS_MAP.get(row["狀態"], ("tag-planning", "?"))
-    card_cls = CARD_CLASS.get(row["狀態"], "proj-card")
-    fill_cls = FILL_CLASS.get(row["狀態"], "progress-bar-fill")
-    if row["優先級"] == "緊急":
-        card_cls += " urgent"
-        fill_cls += " urgent"
-
-    progress_pct = min(100, max(0, row["進度"]))
-    badge = priority_badge(row["優先級"])
-
-    html = f"""
-    <div class="{card_cls}">
-        <div class="proj-title">{row['名稱']}</div>
-        <div class="proj-meta">
-            {badge}
-            <span class="proj-tag {tag_cls}">{tag_icon} {row['狀態']}</span>
-            <span class="proj-tag" style="background:#F0F0F0;color:#444">{row['標籤']}</span>
-            <br>
-            📁 {row['部門']} ｜ 👤 {row['負責人']} ｜ 🗓️ {row['截止日']} ｜ #{row['編號']}
-            <br>
-            <span style="color:#555;font-size:0.8rem">{row['說明']}</span>
-        </div>
-        <div class="progress-wrap">
-            <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#888">
-                <span>進度</span><span><b>{progress_pct}%</b></span>
-            </div>
-            <div class="progress-bar-bg">
-                <div class="{fill_cls}" style="width:{progress_pct}%"></div>
-            </div>
-        </div>
-    </div>
-    """
-    return html
-
-
-# ============================================================
-# 主程式
-# ============================================================
-def main():
-    df = get_projects()
-
-    # 側邊欄
-    st.sidebar.markdown("## 🗂️ 嗑肉石鍋 專案進度")
-    st.sidebar.caption(f"資料更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    st.sidebar.page_link("app.py", label="← 返回數位總部大門")
-    st.sidebar.divider()
-
-    # 篩選器
-    st.sidebar.markdown("### 🔍 篩選")
-    all_depts = ["全部"] + sorted(df["部門"].unique().tolist())
-    sel_dept = st.sidebar.selectbox("部門", all_depts, key="dept_filter")
-    all_status = ["全部", "執行中", "規劃中", "已完成", "暫緩"]
-    sel_status = st.sidebar.selectbox("狀態", all_status, key="status_filter")
-    all_priority = ["全部", "緊急", "高", "中", "低"]
-    sel_priority = st.sidebar.selectbox("優先級", all_priority, key="priority_filter")
-
-    st.sidebar.divider()
-    view_mode = st.sidebar.radio("檢視模式", ["看板視圖", "列表視圖", "統計分析"], key="view_mode")
-
-    # 套用篩選
-    filtered = df.copy()
-    if sel_dept != "全部":
-        filtered = filtered[filtered["部門"] == sel_dept]
-    if sel_status != "全部":
-        filtered = filtered[filtered["狀態"] == sel_status]
-    if sel_priority != "全部":
-        filtered = filtered[filtered["優先級"] == sel_priority]
-
-    # ========== 頁首 ==========
-    st.markdown("## 🗂️ 嗑肉數位總部 ｜ 專案進度追蹤")
-
-    # KPI
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("📋 專案總數", f"{len(df)} 件")
-    c2.metric("▶ 執行中", f"{len(df[df['狀態']=='執行中'])} 件")
-    c3.metric("📋 規劃中", f"{len(df[df['狀態']=='規劃中'])} 件")
-    c4.metric("✅ 已完成", f"{len(df[df['狀態']=='已完成'])} 件")
-    c5.metric("🔴 緊急", f"{len(df[df['優先級']=='緊急'])} 件")
-
-    st.caption(f"目前篩選：{len(filtered)} 件專案")
+# ──────────────────────────────────────────────
+# 側邊欄
+# ──────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🗂️ 營運部")
+    st.caption("專案進度追蹤")
+    st.divider()
+    st.page_link("app.py",               label="🏢 返回總部大門")
+    st.page_link("pages/1_營收看板.py",   label="📊 財務部 — 營收看板")
+    st.page_link("pages/3_智能戰情室.py", label="🧠 智能戰情室")
     st.divider()
 
-    # ========== 看板視圖 ==========
-    if view_mode == "看板視圖":
-        st.markdown("<div class='section-header'>🗃️ 專案看板</div>", unsafe_allow_html=True)
+    view = st.radio("顯示模式", ["📋 列表視圖", "📊 統計分析"], horizontal=True)
+    st.divider()
 
-        kanban_cols = ["執行中", "規劃中", "已完成", "暫緩"]
-        k1, k2, k3, k4 = st.columns(4)
-        col_map = {"執行中": k1, "規劃中": k2, "已完成": k3, "暫緩": k4}
-        col_label = {
-            "執行中": "▶ 執行中",
-            "規劃中": "📋 規劃中",
-            "已完成": "✅ 已完成",
-            "暫緩": "⏸ 暫緩",
-        }
-        col_color = {
-            "執行中": "#2980B9", "規劃中": "#E67E22",
-            "已完成": "#27AE60", "暫緩": "#95A5A6",
-        }
+    dept_filter = st.multiselect("篩選部門", options=[], key="dept_filter_placeholder")
+    status_filter = st.multiselect("篩選狀態", ["執行中", "規劃中", "已完成", "逾期"], default=[])
 
-        for status in kanban_cols:
-            with col_map[status]:
-                cnt = len(filtered[filtered["狀態"] == status])
-                st.markdown(
-                    f'<div style="background:{col_color[status]};color:white;padding:6px 12px;'
-                    f'border-radius:8px;font-weight:700;margin-bottom:0.8rem">'
-                    f'{col_label[status]} ({cnt})</div>',
-                    unsafe_allow_html=True
-                )
-                subset = filtered[filtered["狀態"] == status]
-                if subset.empty:
-                    st.markdown('<div style="color:#bbb;font-size:0.85rem;padding:0.5rem">（無專案）</div>',
-                                unsafe_allow_html=True)
-                for _, row in subset.iterrows():
-                    st.markdown(render_project_card(row), unsafe_allow_html=True)
+    st.divider()
+    if st.button("🔄 重新整理", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
-    # ========== 列表視圖 ==========
-    elif view_mode == "列表視圖":
-        st.markdown("<div class='section-header'>📋 專案列表</div>", unsafe_allow_html=True)
+# ──────────────────────────────────────────────
+# 主體
+# ──────────────────────────────────────────────
+st.markdown("# 🗂️ 營運部 — 專案進度")
+st.markdown("**即時同步** 總部專案追蹤助理資料庫 · Google Sheets 後端")
+st.divider()
 
-        disp = filtered[["編號", "名稱", "部門", "負責人", "狀態", "優先級",
-                          "開始日", "截止日", "進度", "標籤"]].copy()
-        disp["進度"] = disp["進度"].apply(lambda x: f"{x}%")
+# 載入資料
+with st.spinner("🔄 正在從 Google Sheets 讀取最新專案資料…"):
+    raw_tasks, err = load_tasks_from_sheets()
 
-        # 狀態排序
-        status_order = {"緊急": 0, "高": 1, "中": 2, "低": 3}
-        disp_sorted = filtered.copy()
-        disp_sorted["_order"] = disp_sorted["優先級"].map(status_order)
-        disp_sorted = disp_sorted.sort_values(["_order", "截止日"])
+if err:
+    st.markdown(f"""
+    <div class="error-box">
+    ⚠️ <b>無法連線 Google Sheets</b><br><br>
+    錯誤訊息：<code>{err[:300]}</code><br><br>
+    <b>請確認：</b><br>
+    1. Streamlit Cloud Secrets 已設定 <code>[gcp_service_account]</code><br>
+    2. <code>google_sheets.spreadsheet_id</code> 已填寫<br>
+    3. 服務帳戶 email 已加入 Google Sheet 為編輯者
+    </div>
+    """, unsafe_allow_html=True)
 
-        for _, row in disp_sorted.iterrows():
-            with st.expander(f"{'🔴' if row['優先級']=='緊急' else '🟠' if row['優先級']=='高' else '🔵' if row['優先級']=='中' else '⚪'} "
-                             f"{row['名稱']}  ─  {row['狀態']} ｜ {row['進度']}%"):
-                st.markdown(render_project_card(row), unsafe_allow_html=True)
-                cl, cr = st.columns(2)
-                with cl:
-                    st.write(f"**編號：** {row['編號']}")
-                    st.write(f"**部門：** {row['部門']}")
-                    st.write(f"**負責人：** {row['負責人']}")
-                with cr:
-                    st.write(f"**開始日：** {row['開始日']}")
-                    st.write(f"**截止日：** {row['截止日']}")
-                    st.write(f"**優先級：** {row['優先級']}")
+    st.info("💡 前往 **Streamlit Cloud → 你的 App → Settings → Secrets**，"
+            "貼上與「總部專案追蹤助理」相同的 secrets.toml 內容即可連動。")
+    st.stop()
 
-    # ========== 統計分析 ==========
+if not raw_tasks:
+    st.warning("⚠️ Google Sheets 中目前沒有任何專案資料，請先在「總部專案追蹤助理」App 匯入任務。")
+    st.stop()
+
+df = tasks_to_df(raw_tasks)
+
+# 更新側邊欄部門選項
+all_depts = sorted(df["部門"].unique().tolist())
+dept_selection = st.sidebar.multiselect("篩選部門", options=all_depts, default=[], key="dept_filter_real")
+
+# 套用篩選
+df_view = df.copy()
+if dept_selection:
+    df_view = df_view[df_view["部門"].isin(dept_selection)]
+if status_filter:
+    df_view = df_view[df_view["狀態"].isin(status_filter)]
+
+# ──────────────────────────────────────────────
+# KPI 列
+# ──────────────────────────────────────────────
+today = date.today()
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("📋 總專案數", len(df))
+c2.metric("⚡ 執行中", len(df[df["狀態"] == "執行中"]))
+c3.metric("✅ 已完成", len(df[df["狀態"] == "已完成"]))
+c4.metric("⚠️ 逾期", len(df[df["狀態"] == "逾期"]))
+avg_prog = df["進度"].mean() if not df.empty else 0
+c5.metric("📈 平均進度", f"{avg_prog:.1f}%")
+
+st.divider()
+
+# ──────────────────────────────────────────────
+# 列表視圖
+# ──────────────────────────────────────────────
+STATUS_TAG = {
+    "執行中": '<span class="proj-tag tag-executing">執行中</span>',
+    "規劃中": '<span class="proj-tag tag-planning">規劃中</span>',
+    "已完成": '<span class="proj-tag tag-done">已完成</span>',
+    "逾期":   '<span class="proj-tag tag-overdue">⚠️逾期</span>',
+}
+
+def card_class(status):
+    return {"已完成": "done", "逾期": "overdue", "執行中": "urgent"}.get(status, "")
+
+def progress_class(status):
+    return {"已完成": "done", "逾期": "overdue"}.get(status, "")
+
+
+if view == "📋 列表視圖":
+    st.markdown(f'<div class="section-header">📋 專案列表（顯示 {len(df_view)} 筆）</div>', unsafe_allow_html=True)
+
+    if df_view.empty:
+        st.info("目前沒有符合篩選條件的專案。")
     else:
-        st.markdown("<div class='section-header-orange'>📊 專案統計分析</div>", unsafe_allow_html=True)
+        df_sorted = df_view.sort_values(["狀態", "截止日"], ascending=[True, True])
+        for _, row in df_sorted.iterrows():
+            tag = STATUS_TAG.get(row["狀態"], "")
+            cc  = card_class(row["狀態"])
+            pc  = progress_class(row["狀態"])
+            prog = row["進度"]
 
-        ca, cb = st.columns(2)
+            desc = row["說明"] or row["目標"] or ""
+            if len(desc) > 80:
+                desc = desc[:80] + "…"
 
-        with ca:
-            # 狀態分佈
-            status_cnt = df.groupby("狀態").size().reset_index(name="件數")
-            fig1 = px.pie(status_cnt, values="件數", names="狀態",
-                          title="各狀態分佈", hole=0.45,
-                          color_discrete_sequence=["#2980B9", "#E67E22", "#27AE60", "#95A5A6"])
-            fig1.update_layout(height=320)
-            st.plotly_chart(fig1, use_container_width=True, key="stat_pie1")
+            card_html = f"""
+            <div class="proj-card {cc}">
+              <div class="proj-title">{row['名稱']}</div>
+              <div class="proj-meta">
+                {tag}
+                🏢 {row['部門']} ｜ 👤 {row['負責人']} ｜
+                📅 {row['截止日'] or '—'}
+                {'｜ 📁 ' + row['來源檔'][:20] if row['來源檔'] else ''}
+              </div>
+              {f'<div class="proj-meta" style="margin-top:4px;color:#555;">{desc}</div>' if desc else ''}
+              <div class="progress-bar-bg">
+                <div class="progress-bar-fill {pc}" style="width:{min(prog,100)}%;"></div>
+              </div>
+              <div class="proj-meta" style="text-align:right;margin-top:2px;">{prog}%</div>
+            </div>
+            """
+            st.markdown(card_html, unsafe_allow_html=True)
 
-        with cb:
-            # 部門工作量
-            dept_cnt = df.groupby("部門").size().reset_index(name="件數")
-            dept_cnt = dept_cnt.sort_values("件數", ascending=True)
-            fig2 = px.bar(dept_cnt, x="件數", y="部門", orientation="h",
-                          title="各部門專案數量",
-                          color="件數", color_continuous_scale="Blues")
-            fig2.update_layout(height=320, showlegend=False)
-            st.plotly_chart(fig2, use_container_width=True, key="stat_bar2")
+else:
+    # ──────────────────────────────────────────────
+    # 統計分析
+    # ──────────────────────────────────────────────
+    st.markdown('<div class="section-header">📊 統計分析</div>', unsafe_allow_html=True)
 
-        st.markdown("<div class='section-header'>📈 進度分佈</div>", unsafe_allow_html=True)
+    col_a, col_b = st.columns(2)
 
-        cc, cd = st.columns(2)
-        with cc:
-            # 進度分佈（執行中專案）
-            exec_df = df[df["狀態"] == "執行中"].sort_values("進度", ascending=False)
-            fig3 = px.bar(exec_df, x="名稱", y="進度", color="優先級",
-                          title="執行中專案進度",
-                          color_discrete_map={
-                              "緊急": "#E63B1F", "高": "#E67E22", "中": "#2980B9", "低": "#7F8C8D"
-                          })
-            fig3.add_hline(y=50, line_dash="dot", line_color="#888", annotation_text="50%")
-            fig3.update_layout(height=380, xaxis_tickangle=-35, yaxis_title="完成度（%）")
-            st.plotly_chart(fig3, use_container_width=True, key="stat_exec")
+    with col_a:
+        # 狀態分佈
+        status_counts = df["狀態"].value_counts().reset_index()
+        status_counts.columns = ["狀態", "數量"]
+        color_map = {"執行中": "#3498DB", "規劃中": "#F39C12", "已完成": "#27AE60", "逾期": "#E63B1F"}
+        fig1 = px.pie(status_counts, names="狀態", values="數量",
+                      color="狀態", color_discrete_map=color_map,
+                      title="專案狀態分佈")
+        fig1.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                           font_family="sans-serif", height=320)
+        st.plotly_chart(fig1, use_container_width=True, config={"displayModeBar": False})
 
-        with cd:
-            # 優先級 × 部門
-            pri_dept = df.groupby(["部門", "優先級"]).size().reset_index(name="件數")
-            fig4 = px.bar(pri_dept, x="部門", y="件數", color="優先級",
-                          title="部門 × 優先級分佈", barmode="stack",
-                          color_discrete_map={
-                              "緊急": "#E63B1F", "高": "#E67E22", "中": "#2980B9", "低": "#7F8C8D"
-                          })
-            fig4.update_layout(height=380, xaxis_tickangle=-30)
-            st.plotly_chart(fig4, use_container_width=True, key="stat_pri_dept")
+    with col_b:
+        # 部門工作量
+        dept_counts = df.groupby("部門").size().reset_index(name="專案數").sort_values("專案數")
+        fig2 = px.bar(dept_counts, x="專案數", y="部門", orientation="h",
+                      title="各部門專案數", color_discrete_sequence=["#2C3E50"])
+        fig2.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                           font_family="sans-serif", height=320)
+        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
-        # 甘特圖概覽
-        st.markdown("<div class='section-header'>🗓️ 專案時程甘特圖</div>", unsafe_allow_html=True)
-        gantt_df = df[df["狀態"] != "暫緩"].copy()
-        gantt_df["開始日"] = pd.to_datetime(gantt_df["開始日"])
-        gantt_df["截止日"] = pd.to_datetime(gantt_df["截止日"])
-        gantt_df = gantt_df.sort_values("截止日")
+    # 執行中進度條
+    executing = df[df["狀態"] == "執行中"].sort_values("進度", ascending=False)
+    if not executing.empty:
+        st.markdown('<div class="section-header">⚡ 執行中專案進度</div>', unsafe_allow_html=True)
+        fig3 = go.Figure()
+        fig3.add_bar(x=executing["進度"], y=executing["名稱"].str[:20],
+                     orientation="h", marker_color="#3498DB",
+                     text=executing["進度"].apply(lambda v: f"{v}%"),
+                     textposition="outside")
+        fig3.add_vline(x=50, line_dash="dash", line_color="#E63B1F",
+                       annotation_text="50% 基準", annotation_position="top")
+        fig3.update_layout(xaxis=dict(range=[0, 110]), plot_bgcolor="white",
+                           paper_bgcolor="white", font_family="sans-serif", height=max(300, len(executing)*36))
+        st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
 
-        fig5 = px.timeline(
-            gantt_df, x_start="開始日", x_end="截止日", y="名稱",
-            color="狀態",
-            color_discrete_map={
-                "執行中": "#2980B9", "規劃中": "#E67E22",
-                "已完成": "#27AE60", "暫緩": "#95A5A6",
-            },
-            title="2026 專案時程總覽",
-        )
-        fig5.update_yaxes(categoryorder="total ascending")
-        fig5.add_vline(x=datetime.now(), line_dash="dash", line_color="#E63B1F",
-                       annotation_text="今日", annotation_position="top right")
-        fig5.update_layout(height=420, xaxis_title="日期", yaxis_title="")
-        st.plotly_chart(fig5, use_container_width=True, key="stat_gantt")
+    # 甘特圖
+    gantt_df = df[df["開始日"].str.len() > 0].copy() if "開始日" in df.columns else pd.DataFrame()
+    if not gantt_df.empty and "截止日" in gantt_df.columns:
+        gantt_df = gantt_df[gantt_df["截止日"].str.len() > 0].copy()
+    if not gantt_df.empty:
+        st.markdown('<div class="section-header">📅 甘特圖時程</div>', unsafe_allow_html=True)
+        gantt_df = gantt_df.rename(columns={"名稱": "Task", "開始日": "Start", "截止日": "Finish", "部門": "Resource"})
+        fig4 = px.timeline(gantt_df.head(20), x_start="Start", x_end="Finish",
+                           y="Task", color="Resource",
+                           color_discrete_sequence=px.colors.qualitative.Set2)
+        fig4.add_vline(x=str(today), line_dash="dash", line_color="#E63B1F",
+                       annotation_text="今天")
+        fig4.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                           font_family="sans-serif", height=max(300, len(gantt_df.head(20))*32))
+        st.plotly_chart(fig4, use_container_width=True, config={"displayModeBar": False})
 
-        # 完整明細表
-        st.markdown("<div class='section-header'>📋 完整明細</div>", unsafe_allow_html=True)
-        tbl = df[["編號", "名稱", "部門", "負責人", "狀態", "優先級",
-                  "截止日", "進度", "標籤"]].copy()
-        tbl["進度"] = tbl["進度"].apply(lambda x: f"{x}%")
-        st.dataframe(tbl, use_container_width=True, hide_index=True)
-
-
-main()
+    # 完整資料表
+    st.markdown('<div class="section-header">📋 完整專案清單</div>', unsafe_allow_html=True)
+    show_cols = ["名稱", "部門", "負責人", "狀態", "進度", "開始日", "截止日", "說明"]
+    st.dataframe(df_view[show_cols], use_container_width=True, hide_index=True)
