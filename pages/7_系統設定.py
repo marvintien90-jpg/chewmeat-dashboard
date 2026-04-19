@@ -53,6 +53,9 @@ with st.sidebar:
     st.page_link("pages/2_專案進度.py",   label="🗂️ 專案進度")
     st.page_link("pages/4_匯入管理.py",   label="📥 匯入管理")
     st.page_link("pages/8_歷史歷程.py",   label="📊 歷史歷程")
+    st.divider()
+    from lib.sidebar import drive_folder_widget
+    drive_folder_widget()
 
 st.markdown("# ⚙️ 系統設定")
 st.markdown("連線狀態確認、資料夾設定、快取清理與資料管理")

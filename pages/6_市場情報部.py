@@ -66,6 +66,9 @@ with st.sidebar:
     st.page_link("pages/5_品牌行銷部.py", label="🎨 品牌行銷部")
     st.divider()
     region_filter = st.selectbox("選擇商圈", ["全部商圈", "台中", "台北", "高雄", "彰化"])
+    st.divider()
+    from lib.sidebar import drive_folder_widget
+    drive_folder_widget()
 
 # ──────────────────────────────────────────────
 # 標題

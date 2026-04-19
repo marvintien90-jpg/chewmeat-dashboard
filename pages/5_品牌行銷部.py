@@ -59,6 +59,9 @@ with st.sidebar:
     st.page_link("pages/1_營收看板.py",   label="📊 財務部 — 營收看板")
     st.page_link("pages/3_智能戰情室.py", label="🧠 智能戰情室")
     st.page_link("pages/6_市場情報部.py", label="🔍 市場情報部")
+    st.divider()
+    from lib.sidebar import drive_folder_widget
+    drive_folder_widget()
 
 # ──────────────────────────────────────────────
 # 標題

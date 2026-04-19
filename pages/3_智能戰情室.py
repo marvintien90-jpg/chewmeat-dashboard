@@ -88,6 +88,9 @@ with st.sidebar:
     if st.button("🔄 重新診斷", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+    st.divider()
+    from lib.sidebar import drive_folder_widget
+    drive_folder_widget()
 
 # ──────────────────────────────────────────────
 # 標題
