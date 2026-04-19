@@ -10,18 +10,9 @@ import streamlit as st
 # ──────────────────────────────────────────────
 # 常數
 # ──────────────────────────────────────────────
-SHEET_ID = "1NZQEJgL-HkB08JSW6zsVHRSyl_XgwLc5etUqSF0O9ow"
-
-SHEET_GIDS = {
-    "2025-01": "672482866",  "2025-02": "1943981506", "2025-03": "847955849",
-    "2025-04": "591730250",  "2025-05": "695013616",  "2025-06": "897256004",
-    "2025-07": "593028448",  "2025-08": "836455215",  "2025-09": "1728608975",
-    "2025-10": "2043079442", "2025-11": "1307429413", "2025-12": "1838876978",
-    "2026-01": "872131612",  "2026-02": "162899314",  "2026-03": "1575135129",
-    "2026-04": "1702412906", "2026-05": "1499115222", "2026-06": "467088033",
-}
-
-CLOSED_STORES = {"北屯軍福店", "犝犝楠梓店", "高雄大順店", "高雄自由店", "高雄鼎強店", "鳳山文中店"}
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
+from lib.config import REVENUE_SHEET_ID as SHEET_ID, REVENUE_SHEET_GIDS as SHEET_GIDS, CLOSED_STORES
 
 from datetime import date
 
@@ -225,8 +216,15 @@ def load_projects() -> pd.DataFrame:
         rows = []
         for t in tasks:
             status = _derive_status(t)
+            start_str = str(t.get("when_start", "")).strip()
             end_str = str(t.get("when_end", "")).strip()
+            start_date = None
             end_date = None
+            if start_str:
+                try:
+                    start_date = dt_.strptime(start_str, "%Y-%m-%d").date()
+                except ValueError:
+                    pass
             if end_str:
                 try:
                     end_date = dt_.strptime(end_str, "%Y-%m-%d").date()
@@ -239,7 +237,7 @@ def load_projects() -> pd.DataFrame:
                 "負責人":  t.get("who_person", "—"),
                 "狀態":   status,
                 "優先級":  "高",
-                "開始日":  end_date,
+                "開始日":  start_date,
                 "截止日":  end_date,
                 "進度":   int(t.get("progress", 0)),
                 "標籤":   t.get("who_dept", ""),
