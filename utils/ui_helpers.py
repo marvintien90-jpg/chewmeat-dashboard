@@ -3,7 +3,6 @@
 """
 from __future__ import annotations
 import streamlit as st
-from utils.icons import section_header_html  # re-export for convenience
 
 # ── Plotly 鎖定設定（禁用 pan/zoom/drag，保留 hover）──────────────────────────
 PLOTLY_CONFIG: dict = {
@@ -303,10 +302,23 @@ def render_marquee(items: list) -> None:
 
 def render_section_header(icon_name: str, title: str, badge: str = "") -> None:
     """Render a section header with SVG line icon via st.markdown."""
-    st.markdown(
-        section_header_html(icon_name, title, badge=badge),
-        unsafe_allow_html=True,
-    )
+    try:
+        from utils.icons import section_header_html
+        html = section_header_html(icon_name, title, badge=badge)
+    except Exception:
+        # Fallback: plain header without SVG icon
+        badge_html = (
+            f'<span style="margin-left:8px;font-size:0.72rem;'
+            f'background:rgba(230,59,31,0.12);color:#E63B1F;'
+            f'border-radius:20px;padding:2px 10px;font-weight:700;">{badge}</span>'
+            if badge else ""
+        )
+        html = (
+            f'<div class="section-header" '
+            f'style="display:flex;align-items:center;gap:8px;">'
+            f'<span>{title}</span>{badge_html}</div>'
+        )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def render_ai_summary(title: str, bullets: list) -> None:
