@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from functools import lru_cache
 from typing import Any
 
 import gspread
@@ -24,19 +23,23 @@ from .config import (
 
 
 # ============================================================
-# 連線
+# 連線（module-level singleton，支援 clear_caches 重置）
 # ============================================================
-@lru_cache(maxsize=1)
+_connections: dict = {}
+
+
 def _get_client() -> gspread.Client:
-    info = get_service_account_info()
-    creds = Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
-    return gspread.authorize(creds)
+    if "client" not in _connections:
+        info = get_service_account_info()
+        creds = Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
+        _connections["client"] = gspread.authorize(creds)
+    return _connections["client"]
 
 
-@lru_cache(maxsize=1)
 def _get_spreadsheet() -> gspread.Spreadsheet:
-    client = _get_client()
-    return client.open_by_key(get_spreadsheet_id())
+    if "spreadsheet" not in _connections:
+        _connections["spreadsheet"] = _get_client().open_by_key(get_spreadsheet_id())
+    return _connections["spreadsheet"]
 
 
 def _get_or_create_worksheet(name: str, columns: list[str]) -> gspread.Worksheet:
@@ -188,5 +191,4 @@ def upsert_history(entry: dict[str, Any]) -> None:
 
 def clear_caches() -> None:
     """讓下次 _get_client/_get_spreadsheet 重新連線（給測試或 rerun 用）。"""
-    _get_client.cache_clear()
-    _get_spreadsheet.cache_clear()
+    _connections.clear()

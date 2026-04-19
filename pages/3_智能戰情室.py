@@ -157,7 +157,7 @@ def build_diagnosis(anomalies, overdue, df_proj):
                 msg += "目前無直接關聯逾期專案，建議現場主管深入查核人力與客流。"
             lines.append(f'<div class="diagnosis-box">{msg}<span class="source-tag">{src}</span></div>')
     else:
-        lines.append('<div class="diagnosis-box war-card ok">✅ 近期所有門店營收表現正常，無重大下滑警示。</div>')
+        lines.append('<div class="diagnosis-box" style="border-left-color:#27AE60;">✅ 近期所有門店營收表現正常，無重大下滑警示。</div>')
 
     # 2. 逾期任務
     if overdue:

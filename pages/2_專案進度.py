@@ -165,7 +165,6 @@ with st.sidebar:
     view = st.radio("顯示模式", ["📋 列表視圖", "📊 統計分析"], horizontal=True)
     st.divider()
 
-    dept_filter = st.multiselect("篩選部門", options=[], key="dept_filter_placeholder")
     status_filter = st.multiselect("篩選狀態", ["執行中", "規劃中", "已完成", "逾期"], default=[])
 
     st.divider()
@@ -208,7 +207,7 @@ df = tasks_to_df(raw_tasks)
 
 # 更新側邊欄部門選項
 all_depts = sorted(df["部門"].unique().tolist())
-dept_selection = st.sidebar.multiselect("篩選部門", options=all_depts, default=[], key="dept_filter_real")
+dept_selection = st.sidebar.multiselect("篩選部門", options=all_depts, default=[], key="dept_filter")
 
 # 套用篩選
 df_view = df.copy()
@@ -328,9 +327,9 @@ else:
         st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
 
     # 甘特圖
-    gantt_df = df[df["開始日"].str.len() > 0].copy() if "開始日" in df.columns else pd.DataFrame()
+    gantt_df = df[df["開始日"].apply(lambda x: bool(x and str(x).strip()))].copy() if "開始日" in df.columns else pd.DataFrame()
     if not gantt_df.empty and "截止日" in gantt_df.columns:
-        gantt_df = gantt_df[gantt_df["截止日"].str.len() > 0].copy()
+        gantt_df = gantt_df[gantt_df["截止日"].apply(lambda x: bool(x and str(x).strip()))].copy()
     if not gantt_df.empty:
         st.markdown('<div class="section-header">📅 甘特圖時程</div>', unsafe_allow_html=True)
         gantt_df = gantt_df.rename(columns={"名稱": "Task", "開始日": "Start", "截止日": "Finish", "部門": "Resource"})
