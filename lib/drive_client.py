@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import warnings
 
 from docx import Document
 from google.oauth2.service_account import Credentials
@@ -9,7 +10,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 from .config import (
-    DOC_MIME, DOCX_MIME, DRIVE_SCOPES, FOLDER_MIME, GDOC_MIME,
+    DOC_MIME, DOCX_MIME, DRIVE_SCOPES, FOLDER_MIME, GDOC_MIME, PDF_MIME,
     get_service_account_info,
 )
 
@@ -20,8 +21,11 @@ def get_drive_service():
     return build('drive', 'v3', credentials=creds, cache_discovery=False)
 
 
+PARSEABLE_MIMES = {DOCX_MIME, DOC_MIME, GDOC_MIME, PDF_MIME}
+
+
 def list_doc_files(service, folder_id: str) -> list[dict]:
-    """遞迴列出資料夾底下所有 .doc / .docx / Google Doc 檔案。"""
+    """遞迴列出資料夾底下所有可解析文件（.doc/.docx/Google Doc/PDF）。"""
     out: list[dict] = []
     page_token = None
     while True:
@@ -34,7 +38,7 @@ def list_doc_files(service, folder_id: str) -> list[dict]:
         ).execute()
         for item in resp.get('files', []):
             mime = item['mimeType']
-            if mime in (DOCX_MIME, DOC_MIME, GDOC_MIME):
+            if mime in PARSEABLE_MIMES:
                 out.append(item)
             elif mime == FOLDER_MIME:
                 out.extend(list_doc_files(service, item['id']))
@@ -94,5 +98,21 @@ def extract_text(service, file_id: str, mime_type: str, filename: str) -> str:
                 service.files().delete(fileId=gdoc_id).execute()
             except Exception:
                 pass
+
+    if mime_type == PDF_MIME:
+        try:
+            import pdfplumber
+        except ImportError:
+            raise RuntimeError('缺少 pdfplumber 套件，請執行 pip install pdfplumber')
+        fh = _download_bytes(service, file_id)
+        text_parts: list[str] = []
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')  # 抑制 pdfplumber 的 FontBBox 警告
+            with pdfplumber.open(fh) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text()
+                    if t:
+                        text_parts.append(t)
+        return '\n'.join(text_parts)
 
     raise ValueError(f'不支援的檔案類型：{mime_type}')
