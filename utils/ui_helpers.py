@@ -75,26 +75,102 @@ MARQUEE_CSS = """
 # ── 全域樣式（側欄分隔 + SVG 圖示容器 + 手機響應式）──────────────────────────
 GLOBAL_CSS = """
 <style>
-/* ── 側欄 vs 主內容 視覺分隔 ────────────────────────── */
+/* ── 側欄暗色主題（全面配色修正）──────────────────────── */
 [data-testid="stSidebar"] {
     background: #1A1A1A !important;
     border-right: 2px solid #2E2E2E;
     box-shadow: 4px 0 18px rgba(0,0,0,0.35);
 }
+/* 所有文字類元素 */
+[data-testid="stSidebar"] *,
 [data-testid="stSidebar"] .stMarkdown,
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] .stMarkdown h1,
+[data-testid="stSidebar"] .stMarkdown h2,
+[data-testid="stSidebar"] .stMarkdown h3,
+[data-testid="stSidebar"] .stMarkdown h4,
 [data-testid="stSidebar"] label,
-[data-testid="stSidebar"] .stSelectbox,
-[data-testid="stSidebar"] .stTextInput {
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+    color: #D0D0D0 !important;
+}
+/* 輸入框背景與文字 */
+[data-testid="stSidebar"] input,
+[data-testid="stSidebar"] textarea,
+[data-testid="stSidebar"] .stTextInput input,
+[data-testid="stSidebar"] .stTextArea textarea {
+    background: #2A2A2A !important;
+    color: #E8E8E8 !important;
+    border-color: #444 !important;
+}
+/* Selectbox / multiselect */
+[data-testid="stSidebar"] .stSelectbox > div > div,
+[data-testid="stSidebar"] .stMultiSelect > div > div {
+    background: #2A2A2A !important;
+    color: #E8E8E8 !important;
+    border-color: #444 !important;
+}
+[data-testid="stSidebar"] .stSelectbox span,
+[data-testid="stSidebar"] .stMultiSelect span {
     color: #E8E8E8 !important;
 }
+/* Multiselect tags */
+[data-testid="stSidebar"] [data-baseweb="tag"] {
+    background: rgba(230,59,31,0.25) !important;
+}
+[data-testid="stSidebar"] [data-baseweb="tag"] span {
+    color: #FFA080 !important;
+}
+/* Selectbox dropdown icon */
+[data-testid="stSidebar"] svg[data-testid="stIconMaterial"] {
+    fill: #AAA !important;
+}
+/* Button */
+[data-testid="stSidebar"] button {
+    background: #2A2A2A !important;
+    color: #D0D0D0 !important;
+    border-color: #444 !important;
+}
+[data-testid="stSidebar"] button:hover {
+    background: rgba(230,59,31,0.2) !important;
+    color: #FF8060 !important;
+}
+/* Expander */
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+    background: #222 !important;
+    border-color: #333 !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+    color: #D0D0D0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+    color: #FF8060 !important;
+}
+/* Divider */
+[data-testid="stSidebar"] hr {
+    border-color: #333 !important;
+}
+/* Radio buttons */
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    color: #D0D0D0 !important;
+}
+/* Checkbox */
+[data-testid="stSidebar"] [data-testid="stCheckbox"] label {
+    color: #D0D0D0 !important;
+}
+/* Slider */
+[data-testid="stSidebar"] [data-testid="stSlider"] p {
+    color: #D0D0D0 !important;
+}
+/* Page links */
 [data-testid="stSidebar"] .stPageLink a {
-    color: #CCC !important;
+    color: #B0B0B0 !important;
     font-size: 0.85rem;
     padding: 4px 0;
     transition: color 0.15s;
 }
 [data-testid="stSidebar"] .stPageLink a:hover {
-    color: #E63B1F !important;
+    color: #FF7A5C !important;
 }
 [data-testid="stSidebar"] .sidebar-nav-icon {
     display: inline-flex;

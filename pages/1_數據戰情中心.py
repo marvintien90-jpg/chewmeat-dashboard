@@ -137,6 +137,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ── UI helpers — module 層級 import（供各頁面函式直接呼叫）──────
+from utils.ui_helpers import render_section_header, inject_global_css
+
 # ============================================================
 # 資料讀取
 # ============================================================
