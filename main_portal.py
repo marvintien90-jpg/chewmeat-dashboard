@@ -1,6 +1,6 @@
 import streamlit as st
 
-ACCESS_KEY = "kerou888"
+ACCESS_KEY = "admin888"
 
 # 讀 session_state 不觸發任何 Streamlit 輸出，可在 set_page_config 之前安全使用
 _authenticated = st.session_state.get("authenticated", False)
@@ -133,6 +133,11 @@ def show_login():
         if st.button("進入總部", type="primary", use_container_width=True):
             if key_input == ACCESS_KEY:
                 st.session_state["authenticated"] = True
+                st.session_state["is_admin"] = True
+                if "enabled_pages" not in st.session_state:
+                    st.session_state["enabled_pages"] = {
+                        "數據戰情中心", "專案追蹤師", "決策AI偵察", "品牌數位資產"
+                    }
                 st.rerun()
             elif key_input:
                 st.error("❌ 密鑰錯誤，請重新輸入")
@@ -140,83 +145,88 @@ def show_login():
 
 
 # ============================================================
+# 分頁權限設定（管理員勾選）
+# ============================================================
+ALL_PAGES = {
+    "數據戰情中心": ("pages/1_數據戰情中心.py", "📊", "營收儀表板・門店排行・達標追蹤<br>商圈分析・AI 數據洞察"),
+    "專案追蹤師":   ("pages/2_專案追蹤師.py",   "🗂️", "6 部門跨部門工作進度・審核批示<br>AI 督導摘要・紅黃燈預警"),
+    "決策AI偵察":   ("pages/3_決策AI偵察.py",   "🧠", "跨部門連動診斷・偏差警示<br>逾期任務追蹤・白話報告"),
+    "品牌數位資產": ("pages/4_品牌數位資產.py", "🎨", "活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照"),
+}
+
+CARD_CLASSES = {
+    "數據戰情中心": "",
+    "專案追蹤師":   "module-card-ops",
+    "決策AI偵察":   "module-card-brain",
+    "品牌數位資產": "module-card-mkt",
+}
+
+
+# ============================================================
 # 已驗證：門戶主頁
 # ============================================================
 def show_portal():
-    # 側邊欄：登出按鈕 + 快速導航
+    enabled = st.session_state.get("enabled_pages", set(ALL_PAGES.keys()))
+
     with st.sidebar:
         st.markdown("## 🏢 嗑肉數位總部")
-        st.caption("指揮中心")
+        st.caption("管理員指揮中心")
+        st.divider()
+
+        # 管理員分頁勾選
+        st.markdown("### ⚙️ 本次開放功能")
+        new_enabled: set[str] = set()
+        for page_name in ALL_PAGES:
+            checked = st.checkbox(
+                page_name,
+                value=(page_name in enabled),
+                key=f"chk_{page_name}",
+            )
+            if checked:
+                new_enabled.add(page_name)
+        st.session_state["enabled_pages"] = new_enabled
+
         st.divider()
         st.markdown("### 🚪 快速進入")
-        st.page_link("pages/1_營收看板.py",   label="📊 財務部 — 營收看板")
-        st.page_link("pages/2_專案進度.py",   label="🗂️ 營運部 — 專案進度")
-        st.page_link("pages/3_智能戰情室.py", label="🧠 指揮部 — 智能戰情室")
-        st.page_link("pages/5_品牌行銷部.py", label="🎨 行銷部 — 品牌行銷")
-        st.page_link("pages/6_市場情報部.py", label="🔍 情報部 — 市場情報")
+        for page_name, (path, icon, _) in ALL_PAGES.items():
+            if page_name in new_enabled:
+                st.page_link(path, label=f"{icon} {page_name}")
+            else:
+                st.caption(f"🔒 {page_name}（已關閉）")
         st.divider()
         if st.button("🔒 登出", use_container_width=True):
-            st.session_state["authenticated"] = False
+            for k in ("authenticated", "is_admin", "enabled_pages"):
+                st.session_state.pop(k, None)
             st.rerun()
 
     # 主體
     st.markdown('<div class="hq-title">🏢 嗑肉數位總部</div>', unsafe_allow_html=True)
-    st.markdown('<div class="hq-subtitle">指揮中心 ｜ 選擇部門進入功能模組</div>', unsafe_allow_html=True)
-    st.markdown('<div class="welcome-bar">✅ 身份已驗證，歡迎回到總部</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hq-subtitle">管理員指揮中心 ｜ 功能別模組導航</div>', unsafe_allow_html=True)
+    st.markdown('<div class="welcome-bar">✅ 管理員已驗證，歡迎回到總部 — 請在左側勾選本次開放的功能分頁</div>',
+                unsafe_allow_html=True)
 
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
-        st.markdown("""
-        <div class="module-card">
-            <span class="icon">📊</span>
-            <h2>財務部</h2>
-            <p>營收儀表板・門店排行・達標追蹤<br>商圈分析・AI 數據洞察</p>
-        </div>
-        """, unsafe_allow_html=True)
-        st.page_link("pages/1_營收看板.py", label="→ 進入財務部（營收看板）", use_container_width=True)
+    enabled_now = st.session_state.get("enabled_pages", set())
 
-    with c2:
-        st.markdown("""
-        <div class="module-card module-card-ops">
-            <span class="icon">🗂️</span>
-            <h2>營運部</h2>
-            <p>專案進度追蹤・任務看板<br>待辦管理・專案狀態總覽</p>
-        </div>
-        """, unsafe_allow_html=True)
-        st.page_link("pages/2_專案進度.py", label="→ 進入營運部（專案進度）", use_container_width=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    c3, c4, c5 = st.columns(3, gap="large")
-    with c3:
-        st.markdown("""
-        <div class="module-card module-card-brain">
-            <span class="icon">🧠</span>
-            <h2>智能戰情室</h2>
-            <p>跨部門連動診斷・偏差警示<br>逾期任務追蹤・白話報告</p>
-        </div>
-        """, unsafe_allow_html=True)
-        st.page_link("pages/3_智能戰情室.py", label="→ 進入指揮部（智能戰情室）", use_container_width=True)
-
-    with c4:
-        st.markdown("""
-        <div class="module-card module-card-mkt">
-            <span class="icon">🎨</span>
-            <h2>品牌行銷部</h2>
-            <p>活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照</p>
-        </div>
-        """, unsafe_allow_html=True)
-        st.page_link("pages/5_品牌行銷部.py", label="→ 進入品牌行銷部", use_container_width=True)
-
-    with c5:
-        st.markdown("""
-        <div class="module-card">
-            <span class="icon">🔍</span>
-            <h2>市場情報部</h2>
-            <p>競品價格區間・服務雷達圖<br>市場定位分析・情報研判</p>
-        </div>
-        """, unsafe_allow_html=True)
-        st.page_link("pages/6_市場情報部.py", label="→ 進入市場情報部", use_container_width=True)
+    cols = st.columns(2, gap="large")
+    page_items = list(ALL_PAGES.items())
+    for i, (page_name, (path, icon, desc)) in enumerate(page_items):
+        col = cols[i % 2]
+        extra_class = CARD_CLASSES.get(page_name, "")
+        locked = page_name not in enabled_now
+        with col:
+            lock_badge = '<span style="position:absolute;top:12px;right:16px;font-size:1.4rem;">🔒</span>' if locked else ''
+            st.markdown(f"""
+            <div class="module-card {extra_class}" style="position:relative;opacity:{'0.5' if locked else '1'};">
+                {lock_badge}
+                <span class="icon">{icon}</span>
+                <h2>{page_name}</h2>
+                <p>{desc}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            if not locked:
+                st.page_link(path, label=f"→ 進入 {page_name}", use_container_width=True)
+            else:
+                st.caption("🔒 尚未開放，請在左側勾選啟用")
 
 
 # ============================================================

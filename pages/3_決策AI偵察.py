@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from datetime import date
 
 st.set_page_config(
-    page_title="嗑肉石鍋 ｜ 智能戰情室",
+    page_title="嗑肉石鍋 ｜ 決策AI偵察",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -18,7 +18,12 @@ st.set_page_config(
 # ──────────────────────────────────────────────
 if not st.session_state.get("authenticated", False):
     st.error("🔒 尚未通過身份驗證，請返回總部登入")
-    st.page_link("app.py", label="← 返回數位總部大門", use_container_width=False)
+    st.page_link("main_portal.py", label="← 返回數位總部大門", use_container_width=False)
+    st.stop()
+
+if "決策AI偵察" not in st.session_state.get("enabled_pages", set()):
+    st.error("🔒 本功能尚未開放，請由管理員在總部門禁頁勾選啟用「決策AI偵察」")
+    st.page_link("main_portal.py", label="← 返回總部", use_container_width=False)
     st.stop()
 
 # ──────────────────────────────────────────────
