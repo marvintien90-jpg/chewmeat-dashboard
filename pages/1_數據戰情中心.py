@@ -148,7 +148,7 @@ def load_sheet(year_month, gid):
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
-        raw = pd.read_csv(io.StringIO(resp.text), header=None)
+        raw = pd.read_csv(io.BytesIO(resp.content), header=None)
     except Exception:
         return pd.DataFrame()
 
@@ -1217,7 +1217,7 @@ def main():
     # 側邊欄
     st.sidebar.markdown("## 📊 嗑肉石鍋 營收看板")
     st.sidebar.caption(f"資料更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    st.sidebar.page_link("app.py", label="← 返回數位總部大門")
+    st.sidebar.page_link("main_portal.py", label="← 返回數位總部大門")
     st.sidebar.divider()
 
     if "nav_page" not in st.session_state:

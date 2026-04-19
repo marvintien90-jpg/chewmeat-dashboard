@@ -228,7 +228,7 @@ if anomalies:
         "下滑幅度": "下滑幅度(%)", "數據來源": "來源標註",
     })
     st.dataframe(
-        df_anom.style.background_gradient(subset=["下滑幅度(%)"], cmap="Reds"),
+        df_anom,
         use_container_width=True, hide_index=True,
     )
 
@@ -259,7 +259,7 @@ if overdue:
     df_od = df_od[["編號", "名稱", "部門", "負責人", "截止日", "進度", "逾期天數", "數據來源"]]
     df_od = df_od.rename(columns={"逾期天數": "逾期天數(天)", "數據來源": "來源標註"})
     st.dataframe(
-        df_od.style.background_gradient(subset=["逾期天數(天)"], cmap="Oranges"),
+        df_od,
         use_container_width=True, hide_index=True,
     )
 else:

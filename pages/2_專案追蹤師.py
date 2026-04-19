@@ -133,6 +133,19 @@ st.markdown("""
         padding: 12px 16px; border-radius: 10px; margin: 0.5rem 0;
         font-size: 0.85rem;
     }
+
+    /* ── 手機響應式：任務卡片改為單欄顯示 ── */
+    @media (max-width: 640px) {
+        .main .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+        .task-card { padding: 0.75rem 0.9rem; margin-bottom: 0.5rem; }
+        .task-title { font-size: 0.92rem; }
+        .task-meta  { font-size: 0.72rem; }
+        [data-testid="stMetricValue"] { font-size: 1.2rem !important; }
+        .section-hdr, .section-hdr-dark { font-size: 0.85rem; }
+    }
+
+    /* ── 進度條全寬修正 ── */
+    .prog-bg { width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -237,13 +250,51 @@ else:
     n_todo = n_doing = n_done = n_overdue = n_red = 0
     avg_prog = 0
 
+# ── 第一列：核心 KPIs ──────────────────────────────────────────
 kc = st.columns(6)
 kc[0].metric("📋 總任務數", total)
 kc[1].metric("⏳ 待辦", n_todo)
 kc[2].metric("⚡ 進行中", n_doing)
 kc[3].metric("✅ 已完成", n_done)
-kc[4].metric("⚠️ 逾期", n_overdue)
+kc[4].metric("⚠️ 逾期", n_overdue,
+             delta=f"-{n_overdue} 件" if n_overdue > 0 else None,
+             delta_color="inverse")
 kc[5].metric("📈 平均進度", f"{avg_prog:.1f}%")
+
+# ── 第二列：最累負責人 Top3 + 各部門完工率 ─────────────────────
+if not df_all.empty:
+    # 最累負責人：未完成任務最多的人
+    active_df = df_all[df_all["處理狀態"] != "已完成"]
+    if not active_df.empty and "負責人" in active_df.columns:
+        owner_counts = (active_df.groupby("負責人").size()
+                        .sort_values(ascending=False).head(3))
+        top3_parts = [f"**{n}** ({c}件)" for n, c in owner_counts.items() if str(n).strip()]
+        top3_str = "　".join(top3_parts) if top3_parts else "—"
+    else:
+        top3_str = "—"
+
+    # 各部門完工率
+    dept_completion: dict[str, str] = {}
+    for dept_name, grp in df_all.groupby("來源部門"):
+        done = len(grp[grp["處理狀態"] == "已完成"])
+        total_dept = len(grp)
+        pct = round(done / total_dept * 100) if total_dept > 0 else 0
+        dept_completion[dept_name] = f"{pct}%"
+    completion_str = "　".join([f"**{d}** {p}" for d, p in sorted(dept_completion.items())])
+
+    st.markdown(f"""
+    <div style="background:#FFFBF9;border:1.5px solid #F0E8E5;border-radius:12px;
+                padding:0.9rem 1.2rem;margin:0.8rem 0;display:flex;gap:2rem;flex-wrap:wrap;">
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:0.78rem;color:#888;margin-bottom:4px;">🏋️ 最累負責人 Top 3（進行中任務數）</div>
+        <div style="font-size:0.92rem;">{top3_str}</div>
+      </div>
+      <div style="flex:2;min-width:260px;">
+        <div style="font-size:0.78rem;color:#888;margin-bottom:4px;">📊 各部門完工率</div>
+        <div style="font-size:0.92rem;">{completion_str}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 st.divider()
 

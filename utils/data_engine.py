@@ -78,7 +78,7 @@ def load_revenue_sheet(year_month: str, gid: str) -> pd.DataFrame:
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
-        raw = pd.read_csv(io.StringIO(resp.text), header=None)
+        raw = pd.read_csv(io.BytesIO(resp.content), header=None)
     except Exception:
         return pd.DataFrame()
 

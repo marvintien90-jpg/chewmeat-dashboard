@@ -2,6 +2,15 @@ import streamlit as st
 
 ACCESS_KEY = "admin888"
 
+# ── 功能模組命名映射（顯示名稱 ↔ 內部鍵）──────────────────────────
+DISPLAY_NAMES: dict[str, str] = {
+    "數據戰情中心": "[核心] 數位戰情室",
+    "專案追蹤師":   "[核心] 跨部追蹤督導",
+    "決策AI偵察":   "[決策] 智能 AI 偵察",
+    "品牌數位資產": "[品牌] 數位資產管理",
+}
+REVERSE_NAMES: dict[str, str] = {v: k for k, v in DISPLAY_NAMES.items()}
+
 # 讀 session_state 不觸發任何 Streamlit 輸出，可在 set_page_config 之前安全使用
 _authenticated = st.session_state.get("authenticated", False)
 
@@ -173,26 +182,39 @@ def show_portal():
         st.caption("管理員指揮中心")
         st.divider()
 
-        # 管理員分頁勾選
+        # ── 管理員分頁多選 ──────────────────────────────────
         st.markdown("### ⚙️ 本次開放功能")
-        new_enabled: set[str] = set()
-        for page_name in ALL_PAGES:
-            checked = st.checkbox(
-                page_name,
-                value=(page_name in enabled),
-                key=f"chk_{page_name}",
-            )
-            if checked:
-                new_enabled.add(page_name)
+        all_display = [DISPLAY_NAMES[p] for p in ALL_PAGES]
+        default_display = [DISPLAY_NAMES[p] for p in ALL_PAGES if p in enabled]
+        selected_display = st.multiselect(
+            "選擇本次開放的功能模組",
+            options=all_display,
+            default=default_display,
+            label_visibility="collapsed",
+        )
+        new_enabled: set[str] = {REVERSE_NAMES[d] for d in selected_display if d in REVERSE_NAMES}
         st.session_state["enabled_pages"] = new_enabled
 
+        # ── 快速跳轉下拉選單 ────────────────────────────────
         st.divider()
-        st.markdown("### 🚪 快速進入")
-        for page_name, (path, icon, _) in ALL_PAGES.items():
-            if page_name in new_enabled:
-                st.page_link(path, label=f"{icon} {page_name}")
-            else:
-                st.caption(f"🔒 {page_name}（已關閉）")
+        st.markdown("### 🚀 快速進入")
+        nav_opts = ["— 選擇功能模組 —"] + [DISPLAY_NAMES[p] for p in ALL_PAGES if p in new_enabled]
+        chosen_display = st.selectbox(
+            "功能導航",
+            options=nav_opts,
+            label_visibility="collapsed",
+            key="portal_nav_select",
+        )
+        if chosen_display and chosen_display != "— 選擇功能模組 —":
+            internal_key = REVERSE_NAMES.get(chosen_display)
+            if internal_key and internal_key in ALL_PAGES:
+                st.switch_page(ALL_PAGES[internal_key][0])
+
+        # 未開放模組提示
+        locked_pages = [p for p in ALL_PAGES if p not in new_enabled]
+        if locked_pages:
+            for lp in locked_pages:
+                st.caption(f"🔒 {DISPLAY_NAMES[lp]}（已關閉）")
         st.divider()
         if st.button("🔒 登出", use_container_width=True):
             for k in ("authenticated", "is_admin", "enabled_pages"):
@@ -202,7 +224,7 @@ def show_portal():
     # 主體
     st.markdown('<div class="hq-title">🏢 嗑肉數位總部</div>', unsafe_allow_html=True)
     st.markdown('<div class="hq-subtitle">管理員指揮中心 ｜ 功能別模組導航</div>', unsafe_allow_html=True)
-    st.markdown('<div class="welcome-bar">✅ 管理員已驗證，歡迎回到總部 — 請在左側勾選本次開放的功能分頁</div>',
+    st.markdown('<div class="welcome-bar">✅ 管理員已驗證，歡迎回到總部 — 請在左側多選框勾選本次開放的功能模組，再用下拉選單快速進入</div>',
                 unsafe_allow_html=True)
 
     enabled_now = st.session_state.get("enabled_pages", set())
@@ -214,21 +236,22 @@ def show_portal():
         extra_class = CARD_CLASSES.get(page_name, "")
         locked = page_name not in enabled_now
         with col:
+            display_name = DISPLAY_NAMES.get(page_name, page_name)
             lock_badge = '<span style="position:absolute;top:12px;right:16px;font-size:1.4rem;">🔒</span>' if locked else ''
             opacity = '0.5' if locked else '1'
             card_html = (
                 f'<div class="module-card {extra_class}" style="position:relative;opacity:{opacity};">'
                 f'{lock_badge}'
                 f'<span class="icon">{icon}</span>'
-                f'<h2>{page_name}</h2>'
+                f'<h2>{display_name}</h2>'
                 f'<p>{desc}</p>'
                 f'</div>'
             )
             st.markdown(card_html, unsafe_allow_html=True)
             if not locked:
-                st.page_link(path, label=f"→ 進入 {page_name}", use_container_width=True)
+                st.page_link(path, label=f"→ 進入 {display_name}", use_container_width=True)
             else:
-                st.caption("🔒 尚未開放，請在左側勾選啟用")
+                st.caption("🔒 尚未開放，請在左側多選框勾選啟用")
 
 
 # ============================================================
