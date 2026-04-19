@@ -75,17 +75,8 @@ with st.sidebar:
     st.page_link("pages/3_智能戰情室.py", label="🧠 智能戰情室")
     st.divider()
 
-    st.markdown("### 📁 連動資料夾")
-    _sid = st.session_state.get("import_folder_id", "")
-    if _sid:
-        _disp = _sid[:16] + "…" if len(_sid) > 16 else _sid
-        st.success(f"✅ `{_disp}`")
-        if st.button("✏️ 變更資料夾", use_container_width=True):
-            st.session_state.pop("import_folder_id", None)
-            st.rerun()
-    else:
-        st.warning("尚未設定資料夾")
-        st.page_link("pages/7_系統設定.py", label="⚙️ 前往系統設定輸入資料夾網址", use_container_width=True)
+    from lib.sidebar import drive_folder_widget
+    drive_folder_widget()
 
     st.divider()
     if st.button("🗑️ 清除解析快取", use_container_width=True,

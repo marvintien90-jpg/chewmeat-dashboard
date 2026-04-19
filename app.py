@@ -196,6 +196,9 @@ def show_portal():
         st.page_link("pages/7_系統設定.py",   label="⚙️ 系統設定")
         st.page_link("pages/8_歷史歷程.py",   label="📊 歷史歷程")
         st.divider()
+        from lib.sidebar import drive_folder_widget
+        drive_folder_widget()
+        st.divider()
         if st.button("🔒 登出", use_container_width=True):
             st.session_state["authenticated"] = False
             st.rerun()
