@@ -75,30 +75,17 @@ with st.sidebar:
     st.page_link("pages/3_智能戰情室.py", label="🧠 智能戰情室")
     st.divider()
 
-    st.markdown("### 📁 監控資料夾")
-    default_folder = ""
-    try:
-        from lib.config import get_drive_folder_id
-        default_folder = get_drive_folder_id()
-    except Exception:
-        pass
-
-    raw_input = st.text_input(
-        "Google Drive 資料夾 ID 或 URL",
-        value=st.session_state.get("import_folder_id", default_folder),
-        placeholder="貼入 URL 或直接輸入 ID…",
-        help="從 Drive URL 中取 folders/ 後面的 ID",
-    )
-    # Auto-extract ID from URL
-    folder_id = raw_input.strip()
-    if "folders/" in folder_id:
-        folder_id = folder_id.split("folders/")[-1].split("?")[0].split("/")[0].strip()
-    if folder_id:
-        st.session_state["import_folder_id"] = folder_id
-        display_id = folder_id[:18] + "…" if len(folder_id) > 18 else folder_id
-        st.caption(f"✅ `{display_id}`")
+    st.markdown("### 📁 連動資料夾")
+    _sid = st.session_state.get("import_folder_id", "")
+    if _sid:
+        _disp = _sid[:16] + "…" if len(_sid) > 16 else _sid
+        st.success(f"✅ `{_disp}`")
+        if st.button("✏️ 變更資料夾", use_container_width=True):
+            st.session_state.pop("import_folder_id", None)
+            st.rerun()
     else:
-        st.warning("請輸入資料夾 ID")
+        st.warning("尚未設定資料夾")
+        st.page_link("pages/7_系統設定.py", label="⚙️ 前往系統設定輸入資料夾網址", use_container_width=True)
 
     st.divider()
     if st.button("🗑️ 清除解析快取", use_container_width=True,
@@ -114,18 +101,8 @@ st.divider()
 
 folder_id = st.session_state.get("import_folder_id", "")
 if not folder_id:
-    st.info("👈 請先在左側輸入 Google Drive 資料夾 ID")
-    with st.expander("📖 如何取得資料夾 ID？"):
-        st.markdown("""
-1. 在 Google Drive 中開啟目標資料夾
-2. 複製瀏覽器網址列中的完整 URL
-3. 貼到左側輸入框（系統自動解析 ID）
-
-**支援格式：**
-- Google Docs（線上文件）
-- Word 文件（.docx / .doc）
-- 遞迴掃描所有子資料夾
-        """)
+    st.warning("⚠️ 尚未連動 Google Drive 資料夾，請先在系統設定中設定資料夾網址。")
+    st.page_link("pages/7_系統設定.py", label="⚙️ 前往系統設定 — 設定 Google Drive 資料夾網址", use_container_width=False)
     st.stop()
 
 # ─────────────────────────────────────────────────────────────
