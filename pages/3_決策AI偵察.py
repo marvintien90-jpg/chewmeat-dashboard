@@ -36,10 +36,12 @@ st.markdown("""
     [data-testid="stSidebar"] {background: #FAFAFA;}
 
     .section-header {
-        background: #E63B1F; color: white;
-        padding: 7px 16px; border-radius: 8px;
-        margin: 1rem 0 0.5rem 0; font-weight: 700; font-size: 0.95rem;
+        display: flex; align-items: center; gap: 8px;
+        font-size: 1.0rem; font-weight: 800; color: #1A1A1A;
+        padding: 0.4rem 0; margin: 1.2rem 0 0.6rem;
+        border-bottom: 2px solid #F0F0F0;
     }
+    .section-header svg { flex-shrink: 0; }
     .war-card {
         background: #FFFFFF; border: 1.5px solid #F0E8E5;
         border-radius: 12px; padding: 1.2rem 1.4rem;
@@ -117,7 +119,8 @@ anomalies = get_revenue_anomalies(df_rev, lookback_months=lookback)
 overdue   = get_overdue_projects(df_proj)
 
 # ── 跑馬燈 & AI 摘要 ──
-from utils.ui_helpers import render_marquee, render_ai_summary
+from utils.ui_helpers import render_marquee, render_ai_summary, render_section_header, inject_global_css
+inject_global_css()
 _store_cnt = df_rev["店名"].nunique() if not df_rev.empty else 0
 _proj_cnt = len(df_proj) if not df_proj.empty else 0
 _exec_cnt = len(df_proj[df_proj["狀態"] == "執行中"]) if not df_proj.empty and "狀態" in df_proj.columns else 0
@@ -155,7 +158,7 @@ st.divider()
 # ──────────────────────────────────────────────
 # 白話診斷報告
 # ──────────────────────────────────────────────
-st.markdown('<div class="section-header">🩺 Agent 診斷報告（全中文白話）</div>', unsafe_allow_html=True)
+render_section_header("cpu-chip", "Agent 診斷報告（全中文白話）")
 
 def build_diagnosis(anomalies, overdue, df_proj):
     """產出跨部門連動白話診斷文字。"""
@@ -243,7 +246,7 @@ st.divider()
 # ──────────────────────────────────────────────
 # 營收偏差明細表
 # ──────────────────────────────────────────────
-st.markdown('<div class="section-header">📉 營收偏差明細（來源：營收看板）</div>', unsafe_allow_html=True)
+render_section_header("chart-line", "營收偏差明細（來源：營收看板）")
 
 if anomalies:
     df_anom = pd.DataFrame(anomalies)
@@ -268,15 +271,17 @@ if anomalies:
         plot_bgcolor="white", paper_bgcolor="white",
         font_family="sans-serif", height=360,
         legend=dict(orientation="h", y=1.12),
+        dragmode=False,
+        hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F", font=dict(size=12, color="white")),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False, "staticPlot": False})
 else:
     st.info("✅ 近期無營收下滑超過 10% 的門店。")
 
 # ──────────────────────────────────────────────
 # 逾期任務明細表
 # ──────────────────────────────────────────────
-st.markdown('<div class="section-header">📋 逾期任務明細（來源：專案進度）</div>', unsafe_allow_html=True)
+render_section_header("clipboard-list", "逾期任務明細（來源：專案進度）")
 
 if overdue:
     df_od = pd.DataFrame(overdue)

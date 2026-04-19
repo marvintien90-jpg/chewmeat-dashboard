@@ -59,16 +59,13 @@ st.markdown("""
     [data-testid="stMetricLabel"] {font-size: 0.85rem; color: #888;}
     [data-testid="stMetricValue"] {font-size: 1.5rem; font-weight: 700;}
 
-    .section-hdr {
-        background: #E63B1F; color: white;
-        padding: 7px 16px; border-radius: 8px;
-        margin: 1.2rem 0 0.6rem; font-weight: 700; font-size: 0.95rem;
+    .section-hdr, .section-hdr-dark {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 1.0rem; font-weight: 800; color: #1A1A1A;
+        padding: 0.4rem 0; margin: 1.2rem 0 0.6rem;
+        border-bottom: 2px solid #F0F0F0;
     }
-    .section-hdr-dark {
-        background: #2C3E50; color: white;
-        padding: 7px 16px; border-radius: 8px;
-        margin: 1.2rem 0 0.6rem; font-weight: 700; font-size: 0.95rem;
-    }
+    .section-hdr svg, .section-hdr-dark svg { flex-shrink: 0; }
 
     /* AI 督導摘要區 */
     .ai-summary-box {
@@ -231,7 +228,8 @@ with st.spinner("🔄 正在從各部門 Google Sheets 讀取最新任務資料�
     df_all, errors = _cached_load(_daily_key())
 
 # ── 跑馬燈 & AI 摘要 ──
-from utils.ui_helpers import render_marquee, render_ai_summary
+from utils.ui_helpers import render_marquee, render_ai_summary, render_section_header, inject_global_css
+inject_global_css()
 _total_tasks = len(df_all)
 if not df_all.empty:
     _n_overdue = len(df_all[df_all["處理狀態"] == "逾期"])
@@ -261,7 +259,7 @@ if not _summary_bullets:
 render_ai_summary("專案追蹤師 — 督導摘要", _summary_bullets)
 
 # ── 部門授權狀態列 ──
-st.markdown('<div class="section-hdr-dark">📡 各部門 Sheet 連線狀態</div>', unsafe_allow_html=True)
+render_section_header("plug", "各部門 Sheet 連線狀態")
 dept_cols = st.columns(6)
 dept_list = ["行銷", "人資", "採購", "行政", "財務", "資訊"]
 for i, dept in enumerate(dept_list):
@@ -555,8 +553,7 @@ LIGHT_TO_CARD = {"🔴": "red", "🟡": "yellow", "🟢": "green", "⚪": "gray"
 PROG_CLASS    = {"已完成": "done", "逾期": "overdue"}
 
 if view_mode == "📋 卡片視圖":
-    st.markdown(f'<div class="section-hdr">📋 任務清單（顯示 {len(df_view)} 筆）</div>',
-                unsafe_allow_html=True)
+    render_section_header("clipboard-list", f"任務清單（顯示 {len(df_view)} 筆）")
 
     if df_view.empty:
         st.info("目前沒有符合篩選條件的任務。")
@@ -600,7 +597,7 @@ elif view_mode == "📊 統計分析":
     import plotly.express as px
     import plotly.graph_objects as go
 
-    st.markdown('<div class="section-hdr">📊 各部門工作統計</div>', unsafe_allow_html=True)
+    render_section_header("chart-bar", "各部門工作統計")
 
     if df_all.empty:
         st.info("尚無資料可供統計。")
@@ -612,19 +609,25 @@ elif view_mode == "📊 統計分析":
             cmap = {"待辦": "#9CA3AF", "進行中": "#3B82F6", "已完成": "#10B981", "逾期": "#EF4444"}
             fig1 = px.pie(status_cnt, names="狀態", values="數量",
                           color="狀態", color_discrete_map=cmap, title="全部門狀態分佈")
-            fig1.update_layout(paper_bgcolor="white", font_family="sans-serif", height=300)
-            st.plotly_chart(fig1, use_container_width=True, config={"displayModeBar": False})
+            fig1.update_layout(paper_bgcolor="white", font_family="sans-serif", height=300,
+                               dragmode=False,
+                               hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F",
+                                               font=dict(size=12, color="white")))
+            st.plotly_chart(fig1, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False, "staticPlot": False})
 
         with col_b:
             dept_cnt = df_all.groupby("來源部門").size().reset_index(name="任務數").sort_values("任務數")
             fig2 = px.bar(dept_cnt, x="任務數", y="來源部門", orientation="h",
                           title="各部門任務數", color_discrete_sequence=["#E63B1F"])
-            fig2.update_layout(paper_bgcolor="white", font_family="sans-serif", height=300)
-            st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+            fig2.update_layout(paper_bgcolor="white", font_family="sans-serif", height=300,
+                               dragmode=False,
+                               hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F",
+                                               font=dict(size=12, color="white")))
+            st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False, "staticPlot": False})
 
         # 燈號矩陣
         if "燈號" in df_all.columns:
-            st.markdown('<div class="section-hdr-dark">🚦 部門×燈號矩陣</div>', unsafe_allow_html=True)
+            render_section_header("adjustments", "部門×燈號矩陣")
             light_matrix = df_all.groupby(["來源部門", "燈號"]).size().unstack(fill_value=0).reset_index()
             st.dataframe(light_matrix, use_container_width=True, hide_index=True)
 
@@ -638,11 +641,14 @@ elif view_mode == "📊 統計分析":
                      text=dept_prog["平均進度"].apply(lambda v: f"{v:.1f}%"),
                      textposition="outside")
         fig3.update_layout(xaxis=dict(range=[0, 115]), title="各部門平均任務進度",
-                           paper_bgcolor="white", font_family="sans-serif", height=280)
-        st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
+                           paper_bgcolor="white", font_family="sans-serif", height=280,
+                           dragmode=False,
+                           hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F",
+                                           font=dict(size=12, color="white")))
+        st.plotly_chart(fig3, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False, "staticPlot": False})
 
         # 完整表格
-        st.markdown('<div class="section-hdr-dark">📋 完整任務清單</div>', unsafe_allow_html=True)
+        render_section_header("clipboard-list", "完整任務清單")
         show_cols = ["燈號", "來源部門", "負責人", "任務項目", "截止日期", "目前進度", "處理狀態"]
         avail = [c for c in show_cols if c in df_view.columns]
         st.dataframe(df_view[avail], use_container_width=True, hide_index=True)
@@ -653,7 +659,7 @@ elif view_mode == "📊 統計分析":
 else:
     from utils.data_engine import write_dept_approval
 
-    st.markdown('<div class="section-hdr">✍️ 總指揮審核批示</div>', unsafe_allow_html=True)
+    render_section_header("pencil-square", "總指揮審核批示")
     st.caption("選擇任務後點擊「核准」或輸入批示意見，系統將即時寫回原始 Google Sheet")
 
     if df_view.empty:

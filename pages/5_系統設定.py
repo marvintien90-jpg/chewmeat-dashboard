@@ -30,10 +30,12 @@ st.markdown("""
     .main .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
     [data-testid="stSidebarNav"] {display: none !important;}
     .section-header {
-        background: #E63B1F; color: white;
-        padding: 7px 16px; border-radius: 8px;
-        margin: 1rem 0 0.5rem; font-weight: 700; font-size: 0.95rem;
+        display: flex; align-items: center; gap: 8px;
+        font-size: 1.0rem; font-weight: 800; color: #1A1A1A;
+        padding: 0.4rem 0; margin: 1.2rem 0 0.6rem;
+        border-bottom: 2px solid #F0F0F0;
     }
+    .section-header svg { flex-shrink: 0; }
     .help-box {
         background: #FFF8F6; border-left: 4px solid #E63B1F;
         padding: 12px 16px; border-radius: 8px;
@@ -58,7 +60,8 @@ st.markdown("**管理員專屬** — 設定各部門 Google Sheet 連線與系�
 st.divider()
 
 # ── 跑馬燈 & AI 摘要 ──
-from utils.ui_helpers import render_marquee, render_ai_summary
+from utils.ui_helpers import render_marquee, render_ai_summary, render_section_header, inject_global_css
+inject_global_css()
 import json as _json_sys
 _config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
 _sheets_cfg_path = os.path.join(_config_dir, "dept_sheets.json")
@@ -105,7 +108,7 @@ def extract_sheet_id(url_or_id: str) -> str:
     return m.group(1) if m else s
 
 # ─── Section 1: Google Sheets 設定 ────────────────
-st.markdown('<div class="section-header">📋 各部門 Google Sheet 連線設定</div>', unsafe_allow_html=True)
+render_section_header("plug", "各部門 Google Sheet 連線設定")
 
 st.markdown("""
 <div class="help-box">
@@ -176,7 +179,7 @@ with col_test:
 
 # Show current saved config
 st.divider()
-st.markdown('<div class="section-header">📊 目前設定狀態</div>', unsafe_allow_html=True)
+render_section_header("chart-bar", "目前設定狀態")
 
 saved = load_sheets_config()
 status_cols = st.columns(6)

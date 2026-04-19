@@ -109,16 +109,14 @@ st.markdown("""
         .js-plotly-plot {touch-action: pan-y !important;}
     }
 
-    /* 區塊標題 — 扁平橘紅 */
+    /* 區塊標題 — SVG 圖示 + 底線 */
     .section-header {
-        background: #E63B1F;
-        color: white;
-        padding: 7px 16px;
-        border-radius: 8px;
-        margin: 1rem 0 0.5rem 0;
-        font-weight: 700;
-        font-size: 0.95rem;
+        display: flex; align-items: center; gap: 8px;
+        font-size: 1.0rem; font-weight: 800; color: #1A1A1A;
+        padding: 0.4rem 0; margin: 1.2rem 0 0.6rem;
+        border-bottom: 2px solid #F0F0F0;
     }
+    .section-header svg { flex-shrink: 0; }
 
     /* AI 觀察小方塊 */
     .ai-box {
@@ -289,6 +287,11 @@ def fmt_num(x):
 def plotly_chart(fig, key=None, height=None):
     if height:
         fig.update_layout(height=height)
+    fig.update_layout(
+        dragmode=False,
+        hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F",
+                        font=dict(size=12, color="white")),
+    )
     st.plotly_chart(fig, use_container_width=True, config=MOBILE_CHART_CONFIG, key=key)
 
 
@@ -488,7 +491,7 @@ def page_overview(data):
     today = valid["日期"].max().date()
     yr, mn = today.year, today.month
 
-    st.markdown("<div class='section-header'>💎 四大累計分析（含中位數）</div>", unsafe_allow_html=True)
+    render_section_header("chart-bar", "四大累計分析（含中位數）")
 
     def calc_period(start, end):
         d = data[(data["日期"].dt.date >= start) & (data["日期"].dt.date <= end)]
@@ -540,7 +543,7 @@ def page_overview(data):
     st.caption(f"✨ 日均 = 全店當日合計的平均｜中位 = 全店當日合計的中位數｜門店中位（曆年）= {yoy_sm:,.0f} 元")
     st.divider()
 
-    st.markdown("<div class='section-header'>📈 每日營收趨勢</div>", unsafe_allow_html=True)
+    render_section_header("chart-line", "每日營收趨勢")
     daily = valid.groupby("日期").agg({"營業額": "sum", "來客數": "sum"}).reset_index()
     daily["客單價"] = (daily["營業額"] / daily["來客數"]).round(0)
 
@@ -574,7 +577,7 @@ def page_overview(data):
                        yaxis2=dict(title="客單價（元）", side="right", overlaying="y"))
     plotly_chart(fig2, key="ov_dual")
 
-    st.markdown("<div class='section-header'>📦 中位數 vs 平均數 分佈</div>", unsafe_allow_html=True)
+    render_section_header("chart-bar", "中位數 vs 平均數 分佈")
     col_a, col_b = st.columns(2)
 
     with col_a:
@@ -696,7 +699,7 @@ def page_combat(data):
     sd["分級"] = sd["綜合戰力"].apply(grade)
     sd = sd.sort_values("綜合戰力", ascending=False)
 
-    st.markdown("<div class='section-header'>🏆 綜合戰力排行榜</div>", unsafe_allow_html=True)
+    render_section_header("star", "綜合戰力排行榜")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🟢 S 級店", f"{len(sd[sd['分級'].str.contains('S')])} 店")
@@ -722,7 +725,7 @@ def page_combat(data):
                       yaxis_title="綜合戰力分")
     plotly_chart(fig, key="cb_bar")
 
-    st.markdown("<div class='section-header'>📐 三維戰力矩陣（營收 × 達標 × 規模）</div>", unsafe_allow_html=True)
+    render_section_header("adjustments", "三維戰力矩陣（營收 × 達標 × 規模）")
     fig_sc = px.scatter(
         sd, x="達成率", y="日均營收", size="來客數", color="分級",
         color_discrete_map=colors_map, hover_name="門店",
@@ -732,7 +735,7 @@ def page_combat(data):
     fig_sc.update_traces(hovertemplate="<b>%{hovertext}</b><br>達成率：%{x:.1%}<br>日均：%{y:,.0f} 元<br>來客：%{marker.size}<extra></extra>")
     plotly_chart(fig_sc, key="cb_sc")
 
-    st.markdown("<div class='section-header'>🎯 TOP5 綜合戰力雷達</div>", unsafe_allow_html=True)
+    render_section_header("chart-radar", "TOP5 綜合戰力雷達")
     top5 = sd.head(5)
     cats = ["營收分", "達標分", "客單分", "來客分", "穩定分"]
     fig_r = go.Figure()
@@ -748,7 +751,7 @@ def page_combat(data):
                         height=500)
     plotly_chart(fig_r, key="cb_radar")
 
-    st.markdown("<div class='section-header'>📋 戰力明細</div>", unsafe_allow_html=True)
+    render_section_header("clipboard-list", "戰力明細")
     disp = sd[["分級", "區域", "門店", "綜合戰力", "營收分", "達標分", "客單分", "來客分", "穩定分"]].copy()
     for c in ["綜合戰力", "營收分", "達標分", "客單分", "來客分", "穩定分"]:
         disp[c] = disp[c].apply(lambda x: f"{x:.1f}")
@@ -832,7 +835,7 @@ def page_week(data):
     add_median_line(fig, wd2["營業額"].values)
     plotly_chart(fig, key="wk_wd")
 
-    st.markdown("<div class='section-header'>🔥 熱力圖：選定期間各門店每日</div>", unsafe_allow_html=True)
+    render_section_header("calendar", "熱力圖：選定期間各門店每日")
     heat = wd.pivot_table(index="門店", columns="日期", values="營業額", aggfunc="sum")
     if not heat.empty:
         fig_h = px.imshow(heat.values, labels=dict(x="日期", y="門店", color="營業額"),
@@ -1172,7 +1175,7 @@ def page_ai(data):
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown("<div class='section-header'>🚨 異常偵測</div>", unsafe_allow_html=True)
+        render_section_header("bell", "異常偵測")
         if insights["異常"]:
             for item in insights["異常"]:
                 st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
@@ -1180,7 +1183,7 @@ def page_ai(data):
             st.success("✅ 未發現異常")
 
     with col2:
-        st.markdown("<div class='section-header'>💡 機會點</div>", unsafe_allow_html=True)
+        render_section_header("light-bulb", "機會點")
         if insights["機會"]:
             for item in insights["機會"]:
                 st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
@@ -1188,7 +1191,7 @@ def page_ai(data):
             st.info("暫無特殊機會點")
 
     with col3:
-        st.markdown("<div class='section-header'>📊 規範分析</div>", unsafe_allow_html=True)
+        render_section_header("chart-pie", "規範分析")
         if insights["規範"]:
             for item in insights["規範"]:
                 st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
@@ -1208,7 +1211,8 @@ def page_ai(data):
 # 主程式
 # ============================================================
 def main():
-    from utils.ui_helpers import render_marquee, render_ai_summary
+    from utils.ui_helpers import render_marquee, render_ai_summary, render_section_header, inject_global_css
+    inject_global_css()
 
     with st.spinner("載入資料中..."):
         data = load_all_data()
