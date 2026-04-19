@@ -116,6 +116,30 @@ with st.spinner("🔄 正在從各部門資料庫抓取最新數據…"):
 anomalies = get_revenue_anomalies(df_rev, lookback_months=lookback)
 overdue   = get_overdue_projects(df_proj)
 
+# ── 跑馬燈 & AI 摘要 ──
+from utils.ui_helpers import render_marquee, render_ai_summary
+_store_cnt = df_rev["店名"].nunique() if not df_rev.empty else 0
+_proj_cnt = len(df_proj) if not df_proj.empty else 0
+_exec_cnt = len(df_proj[df_proj["狀態"] == "執行中"]) if not df_proj.empty and "狀態" in df_proj.columns else 0
+render_marquee([
+    f"監控門店 {_store_cnt} 家",
+    f"營收異常 {len(anomalies)} 個" if anomalies else "無營收異常",
+    f"逾期任務 {len(overdue)} 件" if overdue else "無逾期任務",
+    f"執行中專案 {_exec_cnt} 項",
+    f"今日診斷日期：{date.today().strftime('%Y/%m/%d')}",
+])
+_ai_bullets = []
+if anomalies:
+    _ai_bullets.append(f"偵測到 {len(anomalies)} 個門店營收下滑，需要即時關注")
+if overdue:
+    _ai_bullets.append(f"{len(overdue)} 件逾期任務可能影響門店服務與展店時程")
+if not anomalies and not overdue:
+    _ai_bullets.append("各門店營收穩定，所有專案均在時程內推進")
+else:
+    if anomalies and overdue:
+        _ai_bullets.append("建議召開跨部門緊急會議，同時處理營收下滑與任務逾期")
+render_ai_summary("決策AI偵察 — 跨部門連動診斷", _ai_bullets)
+
 # ──────────────────────────────────────────────
 # KPI 總覽列
 # ──────────────────────────────────────────────

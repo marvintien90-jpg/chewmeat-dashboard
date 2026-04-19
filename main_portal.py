@@ -1,6 +1,43 @@
 import streamlit as st
+import json
+import os
 
 ACCESS_KEY = "admin888"
+
+# Config paths
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ACCESS_CONTROL_PATH = os.path.join(_BASE_DIR, "config", "access_control.json")
+
+# Default admin config
+_DEFAULT_ACCESS = {
+    ACCESS_KEY: {
+        "role": "admin",
+        "display_name": "總指揮",
+        "allowed_pages": ["數據戰情中心", "專案追蹤師", "決策AI偵察", "品牌數位資產", "系統設定"],
+    }
+}
+
+def _load_access_control() -> dict:
+    """Load access control config from JSON file."""
+    if os.path.exists(ACCESS_CONTROL_PATH):
+        try:
+            with open(ACCESS_CONTROL_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data:
+                    return data
+        except Exception:
+            pass
+    return _DEFAULT_ACCESS.copy()
+
+def _save_access_control(data: dict) -> bool:
+    """Save access control config to JSON file."""
+    os.makedirs(os.path.dirname(ACCESS_CONTROL_PATH), exist_ok=True)
+    try:
+        with open(ACCESS_CONTROL_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
 
 # ── 功能模組命名映射（顯示名稱 ↔ 內部鍵）──────────────────────────
 DISPLAY_NAMES: dict[str, str] = {
@@ -8,6 +45,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "專案追蹤師":   "[核心] 跨部追蹤督導",
     "決策AI偵察":   "[決策] 智能 AI 偵察",
     "品牌數位資產": "[品牌] 數位資產管理",
+    "系統設定":     "[管理] 系統設定",
 }
 REVERSE_NAMES: dict[str, str] = {v: k for k, v in DISPLAY_NAMES.items()}
 
@@ -89,6 +127,10 @@ st.markdown(f"""
         background: linear-gradient(145deg, #117A65 0%, #1ABC9C 100%);
         box-shadow: 0 6px 24px rgba(17,122,101,0.28);
     }}
+    .module-card-admin {{
+        background: linear-gradient(145deg, #7D3C98 0%, #A569BD 100%);
+        box-shadow: 0 6px 24px rgba(125,60,152,0.28);
+    }}
     .module-card .icon {{ font-size: 3rem; display: block; margin-bottom: 0.6rem; }}
     .module-card h2 {{ font-size: 1.7rem; margin: 0.3rem 0; font-weight: 800; }}
     .module-card p  {{ font-size: 0.88rem; opacity: 0.88; line-height: 1.6; margin: 0; }}
@@ -140,16 +182,22 @@ def show_login():
             key="key_input",
         )
         if st.button("進入總部", type="primary", use_container_width=True):
-            if key_input == ACCESS_KEY:
-                st.session_state["authenticated"] = True
-                st.session_state["is_admin"] = True
-                if "enabled_pages" not in st.session_state:
-                    st.session_state["enabled_pages"] = {
-                        "數據戰情中心", "專案追蹤師", "決策AI偵察", "品牌數位資產"
-                    }
-                st.rerun()
-            elif key_input:
-                st.error("❌ 密鑰錯誤，請重新輸入")
+            if key_input:
+                access_db = _load_access_control()
+                if key_input in access_db:
+                    user_cfg = access_db[key_input]
+                    st.session_state["authenticated"] = True
+                    st.session_state["is_admin"] = (user_cfg.get("role") == "admin")
+                    st.session_state["user_display_name"] = user_cfg.get("display_name", "使用者")
+                    allowed = set(user_cfg.get("allowed_pages", []))
+                    st.session_state["enabled_pages"] = allowed
+                    if user_cfg.get("role") == "admin":
+                        allowed.add("系統設定")
+                        st.session_state["enabled_pages"] = allowed
+                    st.session_state["user_role"] = user_cfg.get("role", "viewer")
+                    st.rerun()
+                else:
+                    st.error("❌ 密鑰錯誤，請重新輸入")
         st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -161,6 +209,7 @@ ALL_PAGES = {
     "專案追蹤師":   ("pages/2_專案追蹤師.py",   "🗂️", "6 部門跨部門工作進度・審核批示<br>AI 督導摘要・紅黃燈預警"),
     "決策AI偵察":   ("pages/3_決策AI偵察.py",   "🧠", "跨部門連動診斷・偏差警示<br>逾期任務追蹤・白話報告"),
     "品牌數位資產": ("pages/4_品牌數位資產.py", "🎨", "活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照"),
+    "系統設定":     ("pages/5_系統設定.py",     "⚙️", "部門 Sheet 連線・密碼管理<br>系統參數設定"),
 }
 
 CARD_CLASSES = {
@@ -168,6 +217,7 @@ CARD_CLASSES = {
     "專案追蹤師":   "module-card-ops",
     "決策AI偵察":   "module-card-brain",
     "品牌數位資產": "module-card-mkt",
+    "系統設定":     "module-card-admin",
 }
 
 
@@ -186,13 +236,25 @@ def show_portal():
         st.markdown("### ⚙️ 本次開放功能")
         all_display = [DISPLAY_NAMES[p] for p in ALL_PAGES]
         default_display = [DISPLAY_NAMES[p] for p in ALL_PAGES if p in enabled]
-        selected_display = st.multiselect(
-            "選擇本次開放的功能模組",
-            options=all_display,
-            default=default_display,
-            label_visibility="collapsed",
-        )
+        is_admin_user = st.session_state.get("is_admin", False)
+        if is_admin_user:
+            selected_display = st.multiselect(
+                "選擇本次開放的功能模組",
+                options=all_display,
+                default=default_display,
+                label_visibility="collapsed",
+            )
+        else:
+            # Non-admin: show read-only list of their allowed pages
+            allowed_display = [DISPLAY_NAMES.get(p, p) for p in enabled if p in DISPLAY_NAMES]
+            st.markdown("**您可使用的功能：**")
+            for d in allowed_display:
+                st.caption(f"✅ {d}")
+            selected_display = allowed_display  # Cannot change
         new_enabled: set[str] = {REVERSE_NAMES[d] for d in selected_display if d in REVERSE_NAMES}
+        if not is_admin_user:
+            # Non-admin: keep their original enabled pages, no change
+            new_enabled = enabled
         st.session_state["enabled_pages"] = new_enabled
 
         # ── 快速跳轉下拉選單 ────────────────────────────────
@@ -215,16 +277,73 @@ def show_portal():
         if locked_pages:
             for lp in locked_pages:
                 st.caption(f"🔒 {DISPLAY_NAMES[lp]}（已關閉）")
+
+        # Admin-only password management
+        if st.session_state.get("is_admin", False):
+            st.divider()
+            st.markdown("### 🔐 密碼權限管理")
+            with st.expander("管理存取密碼", expanded=False):
+                access_db = _load_access_control()
+
+                # Show existing passwords
+                st.markdown("**目前的存取密碼：**")
+                for pw, cfg in list(access_db.items()):
+                    is_admin_pw = cfg.get("role") == "admin"
+                    role_icon = "👑" if is_admin_pw else "👤"
+                    with st.container():
+                        col_pw, col_del = st.columns([4, 1])
+                        with col_pw:
+                            pages_str = "、".join(cfg.get("allowed_pages", []))
+                            st.markdown(f"{role_icon} **`{pw}`** ({cfg.get('display_name','')}) → {pages_str}")
+                        with col_del:
+                            if not is_admin_pw:  # Cannot delete admin
+                                if st.button("🗑️", key=f"del_{pw}", help=f"刪除密碼 {pw}"):
+                                    del access_db[pw]
+                                    _save_access_control(access_db)
+                                    st.rerun()
+
+                st.divider()
+                st.markdown("**新增存取密碼：**")
+                new_pw = st.text_input("新密碼", placeholder="輸入新密碼…", key="new_pw_input")
+                new_name = st.text_input("使用者名稱", placeholder="例：行銷部長", key="new_name_input")
+                new_pages = st.multiselect(
+                    "可存取的功能模組",
+                    options=list(ALL_PAGES.keys()),
+                    default=["數據戰情中心"],
+                    key="new_pages_select",
+                )
+
+                if st.button("➕ 新增密碼", use_container_width=True, key="add_pw_btn"):
+                    if new_pw and new_pw.strip():
+                        if new_pw in access_db:
+                            st.warning("⚠️ 此密碼已存在，請換一個")
+                        elif len(new_pw) < 4:
+                            st.warning("⚠️ 密碼至少需要 4 個字元")
+                        else:
+                            access_db[new_pw] = {
+                                "role": "viewer",
+                                "display_name": new_name.strip() or "一般用戶",
+                                "allowed_pages": new_pages,
+                            }
+                            _save_access_control(access_db)
+                            st.success(f"✅ 已新增密碼：{new_pw}")
+                            st.rerun()
+                    else:
+                        st.warning("⚠️ 請輸入密碼")
+
         st.divider()
         if st.button("🔒 登出", use_container_width=True):
-            for k in ("authenticated", "is_admin", "enabled_pages"):
+            for k in ("authenticated", "is_admin", "enabled_pages", "user_display_name", "user_role"):
                 st.session_state.pop(k, None)
             st.rerun()
 
     # 主體
     st.markdown('<div class="hq-title">🏢 嗑肉數位總部</div>', unsafe_allow_html=True)
     st.markdown('<div class="hq-subtitle">管理員指揮中心 ｜ 功能別模組導航</div>', unsafe_allow_html=True)
-    st.markdown('<div class="welcome-bar">✅ 管理員已驗證，歡迎回到總部 — 請在左側多選框勾選本次開放的功能模組，再用下拉選單快速進入</div>',
+    user_name = st.session_state.get("user_display_name", "管理員")
+    is_admin = st.session_state.get("is_admin", False)
+    role_badge = "👑 管理員" if is_admin else "👤 一般用戶"
+    st.markdown(f'<div class="welcome-bar">✅ {role_badge} [{user_name}] 已驗證，歡迎回到總部 — 請在左側多選框勾選本次開放的功能模組，再用下拉選單快速進入</div>',
                 unsafe_allow_html=True)
 
     enabled_now = st.session_state.get("enabled_pages", set())
@@ -232,6 +351,9 @@ def show_portal():
     cols = st.columns(2, gap="large")
     page_items = list(ALL_PAGES.items())
     for i, (page_name, (path, icon, desc)) in enumerate(page_items):
+        # Skip system settings for non-admin
+        if page_name == "系統設定" and not st.session_state.get("is_admin", False):
+            continue
         col = cols[i % 2]
         extra_class = CARD_CLASSES.get(page_name, "")
         locked = page_name not in enabled_now

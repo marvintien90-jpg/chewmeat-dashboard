@@ -5,9 +5,40 @@ from __future__ import annotations
 import re
 import io
 import requests
+import json as _json
 from typing import Optional, List
 import pandas as pd
 import streamlit as st
+
+# Module-level validation cache — populated by load_all_dept_tasks
+_dept_validation_cache: dict = {}
+
+
+def get_dept_validation_results() -> dict:
+    """Return a copy of the last dept validation results."""
+    return _dept_validation_cache.copy()
+
+
+def extract_sheet_id(url_or_id: str) -> str:
+    """Extract Google Sheet ID from full URL or return as-is if already an ID."""
+    s = str(url_or_id).strip()
+    m = re.search(r'/spreadsheets/d/([a-zA-Z0-9\-_]+)', s)
+    return m.group(1) if m else s
+
+
+def save_dept_sheet_ids(ids: dict[str, str]) -> bool:
+    """Persist dept sheet IDs to config/dept_sheets.json."""
+    import os as _os
+    config_dir = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "config")
+    _os.makedirs(config_dir, exist_ok=True)
+    path = _os.path.join(config_dir, "dept_sheets.json")
+    try:
+        cleaned = {k: extract_sheet_id(v) for k, v in ids.items()}
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(cleaned, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
 
 # ──────────────────────────────────────────────
 # 常數
@@ -333,15 +364,17 @@ from datetime import datetime as _datetime, timedelta as _timedelta
 DEPT_KEYS = ["行銷", "人資", "採購", "行政", "財務", "資訊"]
 
 COL_ALIASES: dict[str, list[str]] = {
-    "負責人":   ["負責人", "承辦人", "執行人", "姓名", "人員", "Owner", "Assignee"],
+    "負責人":   ["負責人", "承辦人", "執行人", "姓名", "人員", "Owner", "Assignee",
+                "立案單位", "負責單位", "申請單位", "負責部門"],
     "任務項目": ["任務項目", "任務名稱", "工作事項", "項目名稱", "工作項目",
-                "任務", "工作", "項目", "Task", "事項", "待辦事項"],
+                "任務", "工作", "項目目標", "項目", "Task", "事項", "待辦事項"],
     "截止日期": ["截止日期", "完成日期", "到期日", "期限", "截止", "完成期限",
-                "Due Date", "Deadline"],
-    "目前進度": ["目前進度", "進度", "完成度", "完成率", "Progress", "進展"],
+                "(預計)完成日", "預計完成日", "完成日", "Due Date", "Deadline"],
+    "目前進度": ["目前進度", "進度", "完成度", "完成率", "Progress", "進展",
+                "進度比", "進度比較", "進度比例"],
     "處理狀態": ["處理狀態", "狀態", "執行狀態", "Status", "任務狀態"],
     "最後更新": ["最後更新", "最後更新日", "更新日期", "更新時間", "updated_at",
-                "Last Updated"],
+                "Last Updated", "立案日"],
 }
 
 DEPT_STANDARD_COLS = [
@@ -368,11 +401,24 @@ def _get_dept_gspread_client():
 
 
 def _get_dept_sheet_ids() -> dict[str, str]:
+    """Read dept sheet IDs from config file first, fallback to st.secrets."""
+    config_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "config", "dept_sheets.json")
+    if _os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+                ids = {k: str(v).strip() for k, v in data.items() if v and str(v).strip()}
+                if ids:
+                    return ids
+        except Exception:
+            pass
     try:
-        import streamlit as st
         return {k: v for k, v in dict(st.secrets.get("dept_sheets", {})).items() if v}
     except Exception:
         return {}
+
+
+_BLANK_VALS = frozenset({"", "nan", "NaN", "None", "NONE", "none", "-", "—", "N/A", "n/a"})
 
 
 def _find_col_alias(headers: list[str], aliases: list[str]) -> str | None:
@@ -383,17 +429,127 @@ def _find_col_alias(headers: list[str], aliases: list[str]) -> str | None:
     return None
 
 
-def _map_dept_columns(df: pd.DataFrame) -> pd.DataFrame:
+def _col_task_quality(df: pd.DataFrame, col: str) -> float:
+    """
+    Score how likely `col` is to contain real task descriptions (0.0–1.0).
+    Good task columns: longer avg string, high uniqueness.
+    Bad (categorical/scope columns): very short values, many repeats.
+    """
+    if col not in df.columns:
+        return 0.0
+    vals = df[col].astype(str).str.strip()
+    vals = vals[~vals.isin(_BLANK_VALS)]
+    if len(vals) == 0:
+        return 0.0
+    avg_len = float(vals.str.len().mean())
+    unique_ratio = vals.nunique() / len(vals)
+    # Normalize: avg_len 8+ chars → full score
+    len_score = min(1.0, avg_len / 8.0)
+    return 0.6 * len_score + 0.4 * unique_ratio
+
+
+# Column names that look like scope/category/target, not task descriptions
+_NON_TASK_KEYWORDS = frozenset({
+    "對象", "類別", "分類", "月份", "年月", "年份", "門店", "店別", "店名",
+    "金額", "數量", "費用", "單價", "備註", "note", "remark", "月", "季",
+    "商圈", "區域", "地區", "range", "region",
+    # Columns whose name contains these are progress/date/unit — not task names
+    "進度", "日期", "立案",
+})
+
+_TASK_COL_QUALITY_THRESHOLD = 0.22
+# Bonus given to alias-matched column to favour explicitly-named task columns
+_TASK_COL_ALIAS_BONUS = 0.10
+
+
+def _smart_find_task_col(df: pd.DataFrame, aliases: list[str]) -> str | None:
+    """
+    Find the best column to use as the task-name column.
+
+    Strategy:
+    1. Find the alias-matched candidate (if any) and score its content quality.
+    2. Scan ALL other eligible columns for content quality.
+    3. Give the alias candidate a small naming-bonus so it wins ties.
+    4. But if a non-alias column clearly outscores it (real task descriptions
+       are long and unique), use that instead.
+    """
+    headers = df.columns.tolist()
+
+    # Step 1 – alias candidate
+    alias_candidate = _find_col_alias(headers, aliases)
+    alias_score = _col_task_quality(df, alias_candidate) if alias_candidate else 0.0
+    # Effective score includes a small bonus for having the right name
+    effective_alias_score = (alias_score + _TASK_COL_ALIAS_BONUS) if alias_candidate else 0.0
+
+    # Step 2 – collect columns already claimed by other standard fields
+    already_claimed: set[str] = set()
+    for std_col, als in COL_ALIASES.items():
+        if std_col == "任務項目":
+            continue
+        found = _find_col_alias(headers, als)
+        if found:
+            already_claimed.add(found)
+
+    # Step 3 – find best content-quality column among all eligible columns
+    best_content_col: str | None = None
+    best_content_score: float = 0.0
+
+    for col in headers:
+        if col in already_claimed:
+            continue
+        col_lower = col.strip().lower()
+        # Skip obviously non-task columns by keyword
+        if any(kw.lower() in col_lower for kw in _NON_TASK_KEYWORDS):
+            continue
+        q = _col_task_quality(df, col)
+        if q > best_content_score:
+            best_content_score = q
+            best_content_col = col
+
+    # Step 4 – choose the better of alias-candidate vs. content-winner
+    # Content winner takes over only if it clearly surpasses the alias candidate
+    if best_content_col and best_content_score > effective_alias_score:
+        return best_content_col
+
+    # Alias candidate (or None if nothing found anywhere)
+    return alias_candidate if alias_candidate else best_content_col
+
+
+def _map_dept_columns(df: pd.DataFrame, _col_map_out: dict | None = None) -> pd.DataFrame:
+    """
+    Map raw sheet columns to standardised names.
+    If `_col_map_out` dict is supplied, it will be populated with
+    {std_col: original_col_name} for diagnostic display.
+    """
     headers = df.columns.tolist()
     rename_map: dict[str, str] = {}
+
+    # Task column: smart content-quality-aware detection
+    task_col = _smart_find_task_col(df, COL_ALIASES["任務項目"])
+    if task_col:
+        rename_map[task_col] = "任務項目"
+        if _col_map_out is not None:
+            _col_map_out["任務項目"] = task_col
+
+    # All other columns: regular alias matching
     for std_col, aliases in COL_ALIASES.items():
+        if std_col == "任務項目":
+            continue
         found = _find_col_alias(headers, aliases)
         if found and found not in rename_map:
             rename_map[found] = std_col
+            if _col_map_out is not None:
+                _col_map_out[std_col] = found
+
     df = df.rename(columns=rename_map)
     for col in ["負責人", "任務項目", "截止日期", "目前進度", "處理狀態", "最後更新"]:
         if col not in df.columns:
             df[col] = ""
+    # Normalize blank-equivalent strings ("nan", "NaN", "None", etc.) → "" in text columns
+    for col in ["負責人", "截止日期", "處理狀態", "最後更新"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+            df.loc[df[col].isin(_BLANK_VALS), col] = ""
     return df
 
 
@@ -435,7 +591,9 @@ def _derive_dept_status(progress: int, deadline_str: str) -> str:
         d = _parse_dept_date(deadline_str)
         if d and d < date.today():
             return "逾期"
-    return "待辦" if progress == 0 else "進行中"
+    if progress > 0:
+        return "進行中"
+    return "待辦"
 
 
 def get_dept_traffic_light(row: dict) -> str:
@@ -454,24 +612,15 @@ def get_dept_traffic_light(row: dict) -> str:
 
 
 def _load_one_dept_sheet(dept_name: str, sheet_id: str) -> pd.DataFrame:
+    """Load dept sheet via public CSV export. Sheet must be 'anyone with link can view'."""
     try:
-        client = _get_dept_gspread_client()
-        sh = client.open_by_key(sheet_id)
-        ws = None
-        for tab in ["任務", "Tasks", "工作清單", "Sheet1", "工作項目", "task", "tasks"]:
-            try:
-                ws = sh.worksheet(tab)
-                break
-            except Exception:
-                continue
-        if ws is None:
-            ws = sh.get_worksheet(0)
-        if ws is None:
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        df = pd.read_csv(io.BytesIO(resp.content))
+        if df.empty:
             return pd.DataFrame()
-        records = ws.get_all_records()
-        if not records:
-            return pd.DataFrame()
-        df = pd.DataFrame(records)
+        df = df.dropna(how="all")
         df = _map_dept_columns(df)
         df["目前進度"] = df["目前進度"].apply(_normalize_dept_progress)
         df["處理狀態"] = df.apply(
@@ -480,32 +629,76 @@ def _load_one_dept_sheet(dept_name: str, sheet_id: str) -> pd.DataFrame:
         df["來源部門"] = dept_name
         df["_sheet_id"] = sheet_id
         df["_row_index"] = range(2, len(df) + 2)
-        df = df[df["任務項目"].astype(str).str.strip() != ""]
+        # Filter blank/NaN task names
+        df = df[~df["任務項目"].astype(str).str.strip().isin(_BLANK_VALS)]
         return df[DEPT_STANDARD_COLS].reset_index(drop=True)
     except Exception as e:
         return pd.DataFrame({"_error": [str(e)], "來源部門": [dept_name]})
 
 
 def load_all_dept_tasks(cache_key: str = "") -> tuple[pd.DataFrame, dict[str, str]]:
+    global _dept_validation_cache
     sheet_ids = _get_dept_sheet_ids()
     frames: list[pd.DataFrame] = []
     errors: dict[str, str] = {}
+    validation_results: dict = {}
+
     for dept_name in DEPT_KEYS:
         sid = sheet_ids.get(dept_name, "")
         if not sid:
-            errors[dept_name] = "尚未設定 Sheet ID（等待授權中）"
+            errors[dept_name] = "⚙️ 尚未設定 Google Sheet 網址（請至系統設定頁配置）"
             continue
-        df = _load_one_dept_sheet(dept_name, sid)
-        if "_error" in df.columns:
-            errors[dept_name] = df["_error"].iloc[0] if not df.empty else "未知錯誤"
-            continue
-        if not df.empty:
-            frames.append(df)
+
+        # Try smart loader first
+        loaded_via_smart = False
+        try:
+            from utils.sheet_validator import validate_and_load_dept_sheet
+            result = validate_and_load_dept_sheet(dept_name, sid)
+            if result["success"] and not result["df"].empty:
+                df = result["df"]
+                # Ensure standard columns are present
+                for col in ["負責人", "任務項目", "截止日期", "目前進度", "處理狀態", "最後更新"]:
+                    if col not in df.columns:
+                        df[col] = ""
+                # Re-apply progress normalisation and status derivation
+                df["目前進度"] = df["目前進度"].apply(_normalize_dept_progress)
+                df["處理狀態"] = df.apply(
+                    lambda r: _derive_dept_status(r["目前進度"], r.get("截止日期", "")), axis=1
+                )
+                df["來源部門"] = dept_name
+                df["_sheet_id"] = sid
+                if "_row_index" not in df.columns:
+                    df["_row_index"] = range(2, len(df) + 2)
+                # Filter blank/NaN task rows
+                df = df[~df["任務項目"].astype(str).str.strip().isin(_BLANK_VALS)]
+                # Keep only standard columns (plus any extras already there)
+                keep = [c for c in DEPT_STANDARD_COLS if c in df.columns]
+                df = df[keep].reset_index(drop=True)
+                if not df.empty:
+                    frames.append(df)
+                validation_results[dept_name] = result
+                loaded_via_smart = True
+        except Exception:
+            pass
+
+        if not loaded_via_smart:
+            # Fallback to old loader
+            df = _load_one_dept_sheet(dept_name, sid)
+            if "_error" in df.columns:
+                errors[dept_name] = df["_error"].iloc[0] if not df.empty else "未知錯誤"
+                continue
+            if not df.empty:
+                frames.append(df)
+
     merged = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=DEPT_STANDARD_COLS)
     if not merged.empty:
         merged["燈號"] = merged.apply(lambda r: get_dept_traffic_light(r.to_dict()), axis=1)
     else:
         merged["燈號"] = pd.Series(dtype=str)
+
+    # Persist validation results for page access
+    _dept_validation_cache.update(validation_results)
+
     return merged, errors
 
 
@@ -554,6 +747,39 @@ def write_dept_approval(sheet_id: str, row_index: int, approval: str, comment: s
         ws.update_cell(row_index, ac, approval)
         ws.update_cell(row_index, cc, comment)
         ws.update_cell(row_index, tc, now_str)
+        return True
+    except Exception:
+        return False
+
+
+def write_dept_field(sheet_id: str, row_index: int, field_name: str, value: str, gid: str = "0") -> bool:
+    """Write a single field value back to the sheet."""
+    try:
+        client = _get_dept_gspread_client()
+        sh = client.open_by_key(sheet_id)
+        ws = sh.get_worksheet_by_id(int(gid)) if gid != "0" else sh.get_worksheet(0)
+        if ws is None:
+            return False
+        headers = ws.row_values(1)
+        col_idx = None
+        # Direct match first
+        for i, h in enumerate(headers):
+            if h.strip() == field_name:
+                col_idx = i + 1
+                break
+        # Then try aliases
+        if col_idx is None:
+            aliases = COL_ALIASES.get(field_name, [field_name])
+            for alias in aliases:
+                for i, h in enumerate(headers):
+                    if h.strip() == alias:
+                        col_idx = i + 1
+                        break
+                if col_idx is not None:
+                    break
+        if col_idx is None:
+            return False
+        ws.update_cell(row_index, col_idx, value)
         return True
     except Exception:
         return False

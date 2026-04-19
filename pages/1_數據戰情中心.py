@@ -1208,6 +1208,8 @@ def page_ai(data):
 # 主程式
 # ============================================================
 def main():
+    from utils.ui_helpers import render_marquee, render_ai_summary
+
     with st.spinner("載入資料中..."):
         data = load_all_data()
 
@@ -1219,6 +1221,33 @@ def main():
     st.sidebar.caption(f"資料更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     st.sidebar.page_link("main_portal.py", label="← 返回數位總部大門")
     st.sidebar.divider()
+
+    # ── 跑馬燈 & AI 摘要（頂部） ──
+    valid_all_mq = data[data["營業額"].notna() & (data["營業額"] > 0)]
+    if not valid_all_mq.empty:
+        latest_ym = valid_all_mq["年月"].max()
+        latest_month_df = valid_all_mq[valid_all_mq["年月"] == latest_ym]
+        total_rev = latest_month_df["營業額"].sum()
+        store_cnt = latest_month_df["門店"].nunique()
+        avg_daily = valid_all_mq.groupby("日期")["營業額"].sum().mean()
+        insights_mq = rule_based_ai_analysis(data)
+        anomaly_cnt = len(insights_mq.get("異常", []))
+        marquee_items = [
+            f"本月累計營收 {total_rev:,.0f} 元",
+            f"監控門店 {store_cnt} 家",
+            f"全店日均 {avg_daily:,.0f} 元",
+            f"異常偵測 {anomaly_cnt} 項" if anomaly_cnt > 0 else "系統運行正常",
+            f"資料更新：{datetime.now().strftime('%m/%d %H:%M')}",
+        ]
+        ai_bullets = []
+        for cat in ["異常", "機會", "規範"]:
+            for item in insights_mq.get(cat, [])[:2]:
+                clean = item.replace("**", "")
+                ai_bullets.append(clean)
+        if not ai_bullets:
+            ai_bullets = ["各門店運營狀況正常，持續監控中"]
+        render_marquee(marquee_items)
+        render_ai_summary("數據戰情中心 — 即時洞察", ai_bullets[:5])
 
     if "nav_page" not in st.session_state:
         st.session_state["nav_page"] = PAGE_LIST[0]

@@ -11,6 +11,17 @@ import streamlit as st
 import pandas as pd
 from datetime import date, datetime
 
+# ──────────────────────────────────────────────
+# Display helper (used throughout the page)
+# ──────────────────────────────────────────────
+_BLANK_DISPLAY = {"", "nan", "NaN", "None", "none", "NONE", "NAN", "-", "N/A", "n/a"}
+
+
+def _disp(v, fallback="—") -> str:
+    """Return v as string, or fallback if v is blank/nan/None."""
+    s = str(v).strip()
+    return s if s not in _BLANK_DISPLAY else fallback
+
 st.set_page_config(
     page_title="嗑肉石鍋 ｜ 專案追蹤師",
     page_icon="🗂️",
@@ -146,6 +157,21 @@ st.markdown("""
 
     /* ── 進度條全寬修正 ── */
     .prog-bg { width: 100%; }
+
+    /* 高質感版本 */
+    .task-card {
+        transition: box-shadow 0.2s ease;
+    }
+    .task-card:hover {
+        box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+    }
+    .quality-score-high { color: #27AE60; }
+    .quality-score-mid  { color: #F39C12; }
+    .quality-score-low  { color: #E74C3C; }
+    .source-tab-badge {
+        display: inline-block; background: #EBF5FB; color: #1A5276;
+        border-radius: 4px; padding: 1px 6px; font-size: 0.7rem; margin-left: 6px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -204,6 +230,36 @@ st.divider()
 with st.spinner("🔄 正在從各部門 Google Sheets 讀取最新任務資料…"):
     df_all, errors = _cached_load(_daily_key())
 
+# ── 跑馬燈 & AI 摘要 ──
+from utils.ui_helpers import render_marquee, render_ai_summary
+_total_tasks = len(df_all)
+if not df_all.empty:
+    _n_overdue = len(df_all[df_all["處理狀態"] == "逾期"])
+    _n_doing = len(df_all[df_all["處理狀態"] == "進行中"])
+    _n_done = len(df_all[df_all["處理狀態"] == "已完成"])
+    _n_red = len(df_all[df_all["燈號"] == "🔴"]) if "燈號" in df_all.columns else 0
+    _avg_p = df_all["目前進度"].mean() if "目前進度" in df_all.columns else 0
+else:
+    _n_overdue = _n_doing = _n_done = _n_red = 0
+    _avg_p = 0
+render_marquee([
+    f"總任務 {_total_tasks} 筆",
+    f"進行中 {_n_doing} 件",
+    f"逾期 {_n_overdue} 件" if _n_overdue > 0 else "無逾期任務",
+    f"🔴 紅燈 {_n_red} 項" if _n_red > 0 else "紅燈清零",
+    f"平均進度 {_avg_p:.1f}%",
+])
+_summary_bullets = []
+if _n_red > 0:
+    _summary_bullets.append(f"共 {_n_red} 項紅燈任務需要總指揮立即介入")
+if _n_overdue > 0:
+    _summary_bullets.append(f"逾期任務 {_n_overdue} 件，建議優先督促相關負責人")
+if _n_doing > 0:
+    _summary_bullets.append(f"進行中任務 {_n_doing} 件，整體平均進度 {_avg_p:.1f}%")
+if not _summary_bullets:
+    _summary_bullets = ["目前無紅燈或逾期任務，各部門執行狀況良好"]
+render_ai_summary("專案追蹤師 — 督導摘要", _summary_bullets)
+
 # ── 部門授權狀態列 ──
 st.markdown('<div class="section-hdr-dark">📡 各部門 Sheet 連線狀態</div>', unsafe_allow_html=True)
 dept_cols = st.columns(6)
@@ -224,14 +280,133 @@ for i, dept in enumerate(dept_list):
                         unsafe_allow_html=True)
 
 if errors:
-    with st.expander("⚠️ 查看連線失敗部門詳情", expanded=False):
+    with st.expander("⚠️ 查看連線失敗部門詳情", expanded=True):
         for dept, msg in errors.items():
             st.markdown(f"""
             <div class="error-box">
-            <b>{dept}</b>：{msg[:200]}<br>
-            <small>請在 Streamlit Secrets → <code>[dept_sheets]</code> 加入 <code>{dept} = "spreadsheet_id"</code></small>
+            <b>{dept}</b>：{msg[:200]}
             </div>
             """, unsafe_allow_html=True)
+        st.info("💡 請前往 [管理] 系統設定 頁面貼入各部門的 Google Sheet 網址（需設定為「知道連結者皆可檢視」）")
+        if st.session_state.get("is_admin", False):
+            st.page_link("pages/5_系統設定.py", label="⚙️ 前往系統設定配置 Google Sheet 網址", use_container_width=True)
+
+st.divider()
+
+# ── 資料品質診斷 ──────────────────────────────
+from utils.data_engine import get_dept_validation_results
+_val_results = get_dept_validation_results()
+
+if _val_results:
+    _all_problems = []
+    for _dept_k, _result_v in _val_results.items():
+        _all_problems.extend(_result_v.get("problems", []))
+
+    # Always show the quality panel when we have validation results
+    _expander_label = (
+        f"🔍 資料品質診斷 — 發現 {len(_all_problems)} 筆需修正項目"
+        if _all_problems else
+        "✅ 資料品質診斷 — 各部門欄位對應概覽"
+    )
+    with st.expander(_expander_label, expanded=bool(_all_problems)):
+        # ── Quality scores row ─────────────────────────────────
+        _q_cols = st.columns(max(1, len(_val_results)))
+        for _qi, (_dept_k, _result_v) in enumerate(_val_results.items()):
+            _q = _result_v.get("quality", {})
+            _score = _q.get("quality_score", 0)
+            _tab_title = _result_v.get("tab_title", "")
+            _color = "#27AE60" if _score >= 80 else ("#F39C12" if _score >= 60 else "#E74C3C")
+            with _q_cols[_qi]:
+                st.markdown(f"""<div style="text-align:center;padding:8px;background:#FAFAFA;
+                    border-radius:8px;border:1px solid #eee;">
+                    <div style="font-size:0.8rem;color:#666;">{_dept_k}</div>
+                    <div style="font-size:1.4rem;font-weight:800;color:{_color};">{_score}</div>
+                    <div style="font-size:0.65rem;color:#999;">品質分數</div>
+                    {f'<div style="font-size:0.65rem;color:#3498DB;margin-top:2px;">📑 {_tab_title}</div>' if _tab_title else ''}
+                    </div>""", unsafe_allow_html=True)
+
+        # ── Column mapping summary ──────────────────────────────
+        st.markdown("---")
+        st.markdown("##### 🗂️ 欄位對應結果（AI 自動偵測）")
+        _map_cols = st.columns(max(1, len(_val_results)))
+        _STD_ICONS = {
+            "任務項目": "📌", "負責人": "👤", "截止日期": "📅",
+            "目前進度": "📊", "處理狀態": "🏷️", "最後更新": "🕒"
+        }
+        for _qi, (_dept_k, _result_v) in enumerate(_val_results.items()):
+            _col_map = _result_v.get("column_mapping", {})
+            _raw_hdrs = _result_v.get("raw_headers", [])
+            with _map_cols[_qi]:
+                st.markdown(f"**{_dept_k}**")
+                if _col_map:
+                    for _std, _orig in _col_map.items():
+                        _icon = _STD_ICONS.get(_std, "▸")
+                        _mapped_note = (
+                            f'<span style="color:#27AE60;">✓</span>'
+                            if _std == _orig else
+                            f'<span style="color:#3498DB;">↦</span>'
+                        )
+                        st.markdown(
+                            f'<div style="font-size:0.76rem;line-height:1.7;">'
+                            f'{_icon} <b>{_std}</b> {_mapped_note} '
+                            f'<code style="font-size:0.7rem;">{_orig}</code></div>',
+                            unsafe_allow_html=True
+                        )
+                    # Highlight unmapped important columns
+                    for _std in ["任務項目", "負責人", "截止日期", "目前進度"]:
+                        if _std not in _col_map:
+                            st.markdown(
+                                f'<div style="font-size:0.76rem;color:#E74C3C;">'
+                                f'{_STD_ICONS.get(_std,"▸")} <b>{_std}</b>'
+                                f' <span style="color:#E74C3C;">⚠ 未偵測到</span></div>',
+                                unsafe_allow_html=True
+                            )
+                else:
+                    st.caption("（未取得對應資訊）")
+                if _raw_hdrs:
+                    _unmapped = [h for h in _raw_hdrs if h not in _col_map.values()][:6]
+                    if _unmapped:
+                        st.markdown(
+                            f'<div style="font-size:0.7rem;color:#999;margin-top:4px;">'
+                            f'原始欄位: {", ".join(_unmapped[:6])}'
+                            f'{"…" if len(_raw_hdrs) > 6 else ""}</div>',
+                            unsafe_allow_html=True
+                        )
+
+        # ── Problem rows correction form ────────────────────────
+        if _all_problems:
+            st.markdown("---")
+            st.markdown("**⚠️ 可在下方直接修正後同步回 Google Sheet：**")
+            from utils.data_engine import write_dept_field
+            for _pi, _prob in enumerate(_all_problems[:20]):
+                with st.container():
+                    _pc1, _pc2, _pc3 = st.columns([3, 3, 2])
+                    with _pc1:
+                        st.markdown(f"**{_prob.get('dept', '')}** → {str(_prob.get('task',''))[:30]}")
+                        st.caption(f"⚠️ {_prob.get('issue_desc', '')}")
+                    with _pc2:
+                        _fix_key = f"fix_{_pi}_{_prob.get('row_index', 0)}"
+                        _fix_val = st.text_input(
+                            f"修正 {_prob.get('field_to_fix', '')}",
+                            value=_prob.get("current_value", ""),
+                            key=_fix_key,
+                            placeholder=f"輸入{_prob.get('field_to_fix', '')}…",
+                            label_visibility="collapsed",
+                        )
+                    with _pc3:
+                        if st.button("回寫", key=f"wb_{_pi}_{_prob.get('row_index', 0)}"):
+                            _ok = write_dept_field(
+                                _prob.get("sheet_id", ""),
+                                _prob.get("row_index", 0),
+                                _prob.get("field_to_fix", ""),
+                                _fix_val,
+                                gid=_prob.get("gid", "0"),
+                            )
+                            if _ok:
+                                st.success("已回寫，請重新整理")
+                            else:
+                                _sheet_url = f"https://docs.google.com/spreadsheets/d/{_prob.get('sheet_id','')}/edit"
+                                st.warning(f"無法直接回寫（需服務帳號授權），請[手動修正]({_sheet_url})")
 
 st.divider()
 
@@ -321,7 +496,8 @@ if red_items:
         light = item["燈號"]
         css_cls = "yellow" if light == "🟡" else ""
         reason = _build_reason(item)
-        deadline_str = f"截止：{item['截止日期']}" if item.get("截止日期") else "無截止日"
+        _dl = _disp(item.get("截止日期", ""))
+        deadline_str = f"截止：{_dl}" if _dl != "—" else "無截止日"
         items_html += (
             f'<div class="ai-item {css_cls}">'
             f'<div>'
@@ -330,7 +506,7 @@ if red_items:
             f'</div>'
             f'<div class="ai-item-task">{item["任務項目"]}</div>'
             f'<div class="ai-item-meta">'
-            f'👤 {item["負責人"] or "—"} ｜ {deadline_str} ｜ 進度 {item["目前進度"]}% ｜ {reason}'
+            f'👤 {_disp(item.get("負責人", ""))} ｜ {deadline_str} ｜ 進度 {item["目前進度"]}% ｜ {reason}'
             f'</div>'
             f'</div>'
         )
@@ -378,7 +554,6 @@ STATUS_TAG = {
 LIGHT_TO_CARD = {"🔴": "red", "🟡": "yellow", "🟢": "green", "⚪": "gray"}
 PROG_CLASS    = {"已完成": "done", "逾期": "overdue"}
 
-
 if view_mode == "📋 卡片視圖":
     st.markdown(f'<div class="section-hdr">📋 任務清單（顯示 {len(df_view)} 筆）</div>',
                 unsafe_allow_html=True)
@@ -400,15 +575,18 @@ if view_mode == "📋 卡片視圖":
             prog_cls = PROG_CLASS.get(status, "")
             tag_html = STATUS_TAG.get(status, "")
 
-            deadline = str(row.get("截止日期", "")) or "—"
-            owner    = str(row.get("負責人",   "")) or "—"
-            dept     = str(row.get("來源部門", "")) or "—"
-            task     = str(row.get("任務項目", "（無標題）"))
+            deadline  = _disp(row.get("截止日期", ""))
+            owner     = _disp(row.get("負責人",   ""))
+            dept      = str(row.get("來源部門", "")) or "—"
+            task      = str(row.get("任務項目", "（無標題）"))
+            tab_title = str(row.get("_tab_title", "")) if "_tab_title" in row else ""
+            tab_badge = (f'<span class="source-tab-badge">📑 {tab_title}</span>'
+                         if tab_title else "")
 
             st.markdown(
                 f'<div class="task-card {card_cls}">'
                 f'<div class="task-title">{light} {task}</div>'
-                f'<div class="task-meta">{tag_html} 🏢 {dept} ｜ 👤 {owner} ｜ 📅 {deadline}</div>'
+                f'<div class="task-meta">{tag_html} 🏢 {dept}{tab_badge} ｜ 👤 {owner} ｜ 📅 {deadline}</div>'
                 f'<div class="prog-bg"><div class="prog-fill {prog_cls}" style="width:{min(prog,100)}%;"></div></div>'
                 f'<div class="task-meta" style="text-align:right;margin-top:2px;">{prog}%</div>'
                 f'</div>',
@@ -493,8 +671,8 @@ else:
             status = row.get("處理狀態", "待辦")
             task   = str(row.get("任務項目", "（無標題）"))
             dept   = str(row.get("來源部門", "—"))
-            owner  = str(row.get("負責人",   "—"))
-            deadline = str(row.get("截止日期", "—")) or "—"
+            owner  = _disp(row.get("負責人",   ""))
+            deadline = _disp(row.get("截止日期", ""))
             prog   = int(row.get("目前進度",  0))
             sheet_id  = str(row.get("_sheet_id",  ""))
             row_index = int(row.get("_row_index", 0))

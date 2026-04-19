@@ -1,0 +1,20 @@
+{
+  "admin888": {
+    "role": "admin",
+    "display_name": "總指揮",
+    "allowed_pages": [
+      "數據戰情中心",
+      "專案追蹤師",
+      "決策AI偵察",
+      "品牌數位資產",
+      "系統設定"
+    ]
+  },
+  "viewer123": {
+    "role": "viewer",
+    "display_name": "行銷主管",
+    "allowed_pages": [
+      "數據戰情中心"
+    ]
+  }
+}
