@@ -34,12 +34,12 @@ st.set_page_config(
 # ──────────────────────────────────────────────
 if not st.session_state.get("authenticated", False):
     st.error("🔒 尚未通過身份驗證，請返回總部登入")
-    st.page_link("main_portal.py", label="← 返回數位總部大門", use_container_width=False)
+    st.page_link("app.py", label="← 返回數位總部大門", use_container_width=False)
     st.stop()
 
 if "專案追蹤師" not in st.session_state.get("enabled_pages", set()):
     st.error("🔒 本功能尚未開放，請由管理員在總部門禁頁勾選啟用「專案追蹤師」")
-    st.page_link("main_portal.py", label="← 返回總部", use_container_width=False)
+    st.page_link("app.py", label="← 返回總部", use_container_width=False)
     st.stop()
 
 # ──────────────────────────────────────────────
@@ -196,7 +196,7 @@ with st.sidebar:
     st.markdown("## 🗂️ 專案追蹤師")
     st.caption("跨部門工作進度總覽")
     st.divider()
-    st.page_link("main_portal.py", label="🏢 返回總部大門")
+    st.page_link("app.py", label="🏢 返回總部大門")
     st.page_link("pages/1_數據戰情中心.py", label="📊 數據戰情中心")
     st.page_link("pages/3_決策AI偵察.py",   label="🧠 決策AI偵察")
     st.divider()

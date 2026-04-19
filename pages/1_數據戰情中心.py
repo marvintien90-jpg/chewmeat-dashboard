@@ -24,12 +24,12 @@ st.set_page_config(
 # ============================================================
 if not st.session_state.get("authenticated", False):
     st.error("🔒 尚未通過身份驗證，請返回總部登入")
-    st.page_link("main_portal.py", label="← 返回數位總部大門", use_container_width=False)
+    st.page_link("app.py", label="← 返回數位總部大門", use_container_width=False)
     st.stop()
 
 if "數據戰情中心" not in st.session_state.get("enabled_pages", set()):
     st.error("🔒 本功能尚未開放，請由管理員在總部門禁頁勾選啟用「數據戰情中心」")
-    st.page_link("main_portal.py", label="← 返回總部", use_container_width=False)
+    st.page_link("app.py", label="← 返回總部", use_container_width=False)
     st.stop()
 
 # ============================================================
@@ -1226,7 +1226,7 @@ def main():
     # 側邊欄
     st.sidebar.markdown("## 📊 嗑肉石鍋 營收看板")
     st.sidebar.caption(f"資料更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    st.sidebar.page_link("main_portal.py", label="← 返回數位總部大門")
+    st.sidebar.page_link("app.py", label="← 返回數位總部大門")
     st.sidebar.divider()
 
     # ── 跑馬燈 & AI 摘要（頂部） ──

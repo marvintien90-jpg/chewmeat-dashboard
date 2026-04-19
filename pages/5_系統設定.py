@@ -16,12 +16,12 @@ st.set_page_config(
 
 if not st.session_state.get("authenticated", False):
     st.error("🔒 尚未通過身份驗證，請返回總部登入")
-    st.page_link("main_portal.py", label="← 返回數位總部大門")
+    st.page_link("app.py", label="← 返回數位總部大門")
     st.stop()
 
 if not st.session_state.get("is_admin", False):
     st.error("🔒 此頁面僅限管理員存取")
-    st.page_link("main_portal.py", label="← 返回總部")
+    st.page_link("app.py", label="← 返回總部")
     st.stop()
 
 # CSS
@@ -49,7 +49,7 @@ with st.sidebar:
     st.markdown("## ⚙️ 系統設定")
     st.caption("管理員專屬")
     st.divider()
-    st.page_link("main_portal.py", label="🏢 返回總部大門")
+    st.page_link("app.py", label="🏢 返回總部大門")
     st.page_link("pages/1_數據戰情中心.py", label="📊 數據戰情中心")
     st.page_link("pages/2_專案追蹤師.py", label="🗂️ 專案追蹤師")
     st.page_link("pages/3_決策AI偵察.py", label="🧠 決策AI偵察")
