@@ -138,7 +138,7 @@ st.markdown("""
 
 
 # ── UI helpers — module 層級 import（供各頁面函式直接呼叫）──────
-from utils.ui_helpers import render_section_header, inject_global_css
+from utils.ui_helpers import render_section_header, inject_global_css, render_marquee
 
 # ============================================================
 # 資料讀取
@@ -436,6 +436,188 @@ def rule_based_ai_analysis(data):
 
 
 # ============================================================
+# Feature 2 — Claude AI 分析輔助函數
+# ============================================================
+def _build_data_summary(data) -> str:
+    """將 DataFrame 轉為文字摘要，供 Claude API 分析使用。"""
+    valid = data[
+        data["營業額"].notna() & (data["營業額"] > 0)
+        & (~data["門店"].isin(CLOSED_STORES))
+    ]
+    if valid.empty:
+        return "無資料"
+
+    latest = valid["日期"].max().date()
+    yr, mn = latest.year, latest.month
+
+    lines: list = [
+        f"資料截至 {latest.strftime('%Y-%m-%d')}，共 {valid['門店'].nunique()} 家門店",
+    ]
+
+    # ── 本月各店表現 ──
+    cur = valid[(valid["日期"].dt.year == yr) & (valid["日期"].dt.month == mn)]
+    if not cur.empty:
+        total_rev = cur["營業額"].sum()
+        lines.append(f"本月累計營收：{total_rev:,.0f} 元")
+        store_sum = cur.groupby("門店").agg(
+            營業額=("營業額", "sum"),
+            來客數=("來客數", "sum"),
+            客單價=("客單價", "mean"),
+            本月目標=("本月目標", "first"),
+        ).reset_index()
+        store_sum["達成率"] = (
+            store_sum["營業額"] / store_sum["本月目標"].replace(0, float("nan"))
+        ) * 100
+        lines.append("\n本月各門店表現：")
+        for _, r in store_sum.iterrows():
+            ach = f"{r['達成率']:.1f}%" if pd.notna(r.get("達成率")) else "N/A"
+            lines.append(
+                f"  - {r['門店']}：營收 {r['營業額']:,.0f}元"
+                f"，來客 {r['來客數']:.0f}人"
+                f"，客單 {r['客單價']:.0f}元，達成率 {ach}"
+            )
+
+    # ── 近7天 vs 前7天 ──
+    last_7 = valid[valid["日期"].dt.date > (latest - timedelta(days=7))]
+    prev_7 = valid[
+        (valid["日期"].dt.date <= (latest - timedelta(days=7)))
+        & (valid["日期"].dt.date > (latest - timedelta(days=14)))
+    ]
+    if not last_7.empty:
+        l7 = last_7["營業額"].sum()
+        p7 = prev_7["營業額"].sum() if not prev_7.empty else 0
+        delta = ((l7 - p7) / p7 * 100) if p7 > 0 else 0
+        lines.append(
+            f"\n近7天合計：{l7:,.0f}元（vs前7天 {delta:+.1f}%）"
+        )
+        we = last_7[last_7["星期"].isin([5, 6])]["營業額"].sum()
+        wd = last_7[~last_7["星期"].isin([5, 6])]["營業額"].sum()
+        if we > 0 and wd > 0:
+            ratio = (we / 2) / (wd / 5) if wd > 0 else 0
+            lines.append(f"週末日均 / 平日日均 = {ratio:.2f}")
+
+    return "\n".join(lines)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _claude_analysis_cached(data_summary: str, api_key: str) -> dict | None:
+    """呼叫 Claude API 分析（快取 30 分鐘）。回傳 dict 或 None（失敗時）。"""
+    try:
+        import anthropic
+        import json
+
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = (
+            "你是嗑肉石鍋的數據分析師。以下是近期門店營收摘要：\n\n"
+            f"{data_summary}\n\n"
+            "請用繁體中文分析，以嚴格 JSON 格式輸出（只輸出 JSON，不要其他文字）：\n"
+            "{\n"
+            '  "異常": ["項目1（限50字）", "項目2"],\n'
+            '  "機會": ["項目1（限50字）", "項目2"],\n'
+            '  "規範": ["項目1（限50字）", "項目2"],\n'
+            '  "總結": "整體評估（100字內）"\n'
+            "}\n"
+            "異常：連續下滑、缺失數據、異常偏低門店\n"
+            "機會：高客單低來客 or 低客單高來客，給具體建議\n"
+            "規範：整體趨勢、週末平日效應、成長方向\n"
+            "每類最多5條，每條限50字。"
+        )
+        resp = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        start, end = text.find("{"), text.rfind("}") + 1
+        if start >= 0 and end > start:
+            return json.loads(text[start:end])
+        return None
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ============================================================
+# Feature 3 — 異常警示通知列資料生成
+# ============================================================
+def _generate_alert_items(data) -> list:
+    """根據資料產生即時警示清單，供跑馬燈使用。"""
+    items: list = []
+    valid = data[
+        data["營業額"].notna() & (data["營業額"] > 0)
+        & (~data["門店"].isin(CLOSED_STORES))
+    ]
+    if valid.empty:
+        return ["✅ 目前無異常警示"]
+
+    latest = valid["日期"].max().date()
+    all_stores = set(valid["門店"].unique())
+
+    # 1. 今日缺資料
+    today_stores = set(valid[valid["日期"].dt.date == latest]["門店"].unique())
+    missing_today = all_stores - today_stores
+    if missing_today:
+        items.append(
+            f"⚠️ {latest.strftime('%m/%d')} 缺少數據門店：{', '.join(sorted(missing_today))}"
+        )
+
+    # 2. 本週缺資料（以最新日期往回推至本週一）
+    dow = latest.weekday()          # 0=Mon
+    week_start = latest - timedelta(days=dow)
+    week_stores = set(valid[valid["日期"].dt.date >= week_start]["門店"].unique())
+    missing_week = all_stores - week_stores
+    if missing_week:
+        items.append(
+            f"📋 本週數據尚缺門店：{', '.join(sorted(missing_week))}"
+        )
+
+    # 3. 今日異常偏高／偏低（±2σ）
+    store_stats = (
+        valid.groupby("門店")["營業額"]
+        .agg(["mean", "std"])
+        .reset_index()
+        .rename(columns={"mean": "均值", "std": "標準差"})
+    )
+    latest_day = valid[valid["日期"].dt.date == latest]
+    for _, r in latest_day.iterrows():
+        store = r["門店"]
+        rev = r["營業額"]
+        stat = store_stats[store_stats["門店"] == store]
+        if stat.empty:
+            continue
+        mu, sigma = stat.iloc[0]["均值"], stat.iloc[0]["標準差"]
+        if sigma > 0:
+            if rev > mu + 2 * sigma:
+                items.append(
+                    f"🚀 {store} 今日 {rev:,.0f}元 — 異常偏高（超均值+2σ）"
+                )
+            elif rev < mu - 2 * sigma:
+                items.append(
+                    f"🔴 {store} 今日 {rev:,.0f}元 — 異常偏低（低於均值-2σ）"
+                )
+
+    # 4. 連續 3 天未達日均目標
+    yr, mn = latest.year, latest.month
+    cur = valid[(valid["日期"].dt.year == yr) & (valid["日期"].dt.month == mn)]
+    if not cur.empty and "本月目標" in cur.columns:
+        days_in_mo = calendar.monthrange(yr, mn)[1]
+        for store in cur["門店"].unique():
+            sd = cur[cur["門店"] == store].sort_values("日期")
+            tgt = sd["本月目標"].iloc[0] if not sd.empty else None
+            if pd.isna(tgt) or tgt <= 0:
+                continue
+            daily_tgt = tgt / days_in_mo
+            last3 = sd.tail(3)
+            if len(last3) >= 3 and (last3["營業額"] < daily_tgt).all():
+                items.append(
+                    f"🔴 {store} 連續3天未達日均目標（目標 {daily_tgt:,.0f}元）"
+                )
+
+    if not items:
+        items = ["✅ 所有門店數據正常，無異常警示"]
+    return items
+
+
+# ============================================================
 # 側邊欄概況
 # ============================================================
 def sidebar_overview(data):
@@ -566,19 +748,44 @@ def page_overview(data):
                       xaxis_title="日期", yaxis_title="營業額（元）")
     plotly_chart(fig, key="ov_bar")
 
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(x=daily["日期"], y=daily["來客數"], name="來客數",
-                          marker_color="#FF7043",
-                          hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f} 人<extra></extra>"))
-    fig2.add_trace(go.Scatter(x=daily["日期"], y=daily["客單價"], name="客單價",
-                               mode="lines+markers", line=dict(color="#2C3E50", width=2),
-                               yaxis="y2",
-                               hovertemplate="客單：%{y:,.0f} 元<extra></extra>"))
-    fig2.update_layout(title="來客數 與 客單價", height=400, hovermode="x unified",
-                       xaxis_title="日期",
-                       yaxis=dict(title="來客數（人）", side="left"),
-                       yaxis2=dict(title="客單價（元）", side="right", overlaying="y"))
-    plotly_chart(fig2, key="ov_dual")
+    # ── Feature 4：來客數 / 客單價 勾選顯示 ─────────────────────────
+    ck1, ck2 = st.columns(2)
+    with ck1:
+        show_guests = st.checkbox("📊 顯示來客數", value=True, key="ov_show_guests")
+    with ck2:
+        show_ticket = st.checkbox("💴 顯示客單價", value=True, key="ov_show_ticket")
+
+    if show_guests or show_ticket:
+        dual_axis = show_guests and show_ticket
+        fig2 = go.Figure()
+        if show_guests:
+            fig2.add_trace(go.Bar(
+                x=daily["日期"], y=daily["來客數"], name="來客數",
+                marker_color="#FF7043",
+                hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f} 人<extra></extra>",
+            ))
+        if show_ticket:
+            fig2.add_trace(go.Scatter(
+                x=daily["日期"], y=daily["客單價"], name="客單價",
+                mode="lines+markers", line=dict(color="#2C3E50", width=2),
+                yaxis="y2" if dual_axis else "y",
+                hovertemplate="客單：%{y:,.0f} 元<extra></extra>",
+            ))
+        layout_kw: dict = dict(
+            title="來客數 與 客單價", height=400,
+            hovermode="x unified", xaxis_title="日期",
+        )
+        if dual_axis:
+            layout_kw["yaxis"]  = dict(title="來客數（人）", side="left")
+            layout_kw["yaxis2"] = dict(title="客單價（元）", side="right", overlaying="y")
+        elif show_guests:
+            layout_kw["yaxis"] = dict(title="來客數（人）")
+        else:
+            layout_kw["yaxis"] = dict(title="客單價（元）")
+        fig2.update_layout(**layout_kw)
+        plotly_chart(fig2, key="ov_dual")
+    else:
+        st.info("💡 請至少勾選「來客數」或「客單價」以顯示圖表")
 
     render_section_header("chart-bar", "中位數 vs 平均數 分佈")
     col_a, col_b = st.columns(2)
@@ -1028,7 +1235,18 @@ def page_target(data):
     dim = calendar.monthrange(yr, mn)[1]
     dom = today.day
 
-    st.info(f"基準日：{today.strftime('%Y-%m-%d')} ｜ 第 {dom}/{dim} 天（{dom/dim*100:.0f}%）")
+    # ── 計算當月 平日(週一~五) / 假日(週六日) 天數分布 ──────────────
+    month_days = pd.date_range(start=date(yr, mn, 1), end=date(yr, mn, dim))
+    total_wday = sum(1 for d in month_days if d.dayofweek < 5)
+    total_wend = sum(1 for d in month_days if d.dayofweek >= 5)
+    elapsed_days = pd.date_range(start=date(yr, mn, 1), end=today)
+    elapsed_wday = sum(1 for d in elapsed_days if d.dayofweek < 5)
+    elapsed_wend = sum(1 for d in elapsed_days if d.dayofweek >= 5)
+
+    st.info(
+        f"基準日：{today.strftime('%Y-%m-%d')} ｜ 第 {dom}/{dim} 天 ｜ "
+        f"已過平日 {elapsed_wday}/{total_wday} 天、假日 {elapsed_wend}/{total_wend} 天"
+    )
 
     cur = data[(data["日期"].dt.year == yr) & (data["日期"].dt.month == mn)]
     cur = cur[cur["營業額"].notna() & (cur["營業額"] > 0)]
@@ -1036,44 +1254,127 @@ def page_target(data):
     if cur.empty:
         st.warning("本月無資料"); return
 
-    sp = cur.groupby(["區域", "門店"]).agg({
-        "營業額": "sum", "來客數": "sum", "本月目標": "first",
-    }).reset_index()
-    sp["已營業天數"] = cur.groupby("門店")["日期"].nunique().values
-    sp["日均實際"] = (sp["營業額"] / sp["已營業天數"]).round(0)
-    sp["預估月營收"] = (sp["日均實際"] * dim).round(0)
-    sp["預估達成率"] = (sp["預估月營收"] / sp["本月目標"] * 100).round(1)
-    sp["目前達成率"] = (sp["營業額"] / sp["本月目標"] * 100).round(1)
-    sp["狀態"] = sp["預估達成率"].apply(
-        lambda x: "🟢 可達標" if x >= 100 else ("🟡 略低" if x >= 85 else "🔴 危險"))
-    sp = sp.sort_values("預估達成率", ascending=False)
+    rows = []
+    for (region, store), sg in cur.groupby(["區域", "門店"]):
+        target_val = sg["本月目標"].dropna()
+        if target_val.empty:
+            continue
+        target = target_val.iloc[0]
+        if pd.isna(target) or target <= 0:
+            continue
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🟢 可達標", f"{len(sp[sp['預估達成率'] >= 100])} 店")
-    c2.metric("🔴 危險", f"{len(sp[sp['預估達成率'] < 85])} 店")
-    c3.metric("剩餘天數", f"{dim - dom} 天")
-    c4.metric("中位達成率", f"{sp['預估達成率'].median():.1f}%")
+        sg = sg.copy()
+        sg["_dow"] = sg["日期"].dt.dayofweek
+        wday_rev = sg[sg["_dow"] < 5]["營業額"].dropna()
+        wend_rev = sg[sg["_dow"] >= 5]["營業額"].dropna()
+        avg_wday = wday_rev.mean() if len(wday_rev) > 0 else 0
+        avg_wend = wend_rev.mean() if len(wend_rev) > 0 else 0
+        if avg_wday == 0 and avg_wend == 0:
+            avg_wday = avg_wend = 1
+        elif avg_wday == 0:
+            avg_wday = avg_wend
+        elif avg_wend == 0:
+            avg_wend = avg_wday
 
-    fig = go.Figure()
-    colors = ["#27AE60" if r >= 100 else ("#FF9800" if r >= 85 else "#E63B1F")
-              for r in sp["預估達成率"]]
-    fig.add_trace(go.Bar(x=sp["門店"], y=sp["預估達成率"], marker_color=colors,
-                         text=[f"{r:.0f}%" for r in sp["預估達成率"]],
-                         textposition="outside"))
-    fig.add_hline(y=100, line_dash="dash", line_color="#E63B1F", annotation_text="目標 100%")
-    add_median_line(fig, sp["預估達成率"].values, "中位")
-    fig.update_layout(title=f"{yr}年{mn}月 預估達成率",
-                      height=450, xaxis_tickangle=-45,
-                      yaxis_title="預估達成率（%）")
-    plotly_chart(fig, key="tg_bar")
+        total_weight = total_wday * avg_wday + total_wend * avg_wend
+        expected_rev = target * (elapsed_wday * avg_wday + elapsed_wend * avg_wend) / total_weight if total_weight > 0 else 0
+        actual_rev = sg["營業額"].sum()
+        vs_exp = (actual_rev / expected_rev * 100) if expected_rev > 0 else 0
+        actual_rate = (actual_rev / target * 100)
 
-    disp = sp[["區域", "門店", "營業額", "本月目標", "目前達成率", "日均實際",
-                "預估月營收", "預估達成率", "狀態"]].copy()
-    for c in ["營業額", "本月目標", "日均實際", "預估月營收"]:
-        disp[c] = disp[c].apply(lambda x: f"{x:,.0f} 元" if pd.notna(x) else "—")
-    for c in ["目前達成率", "預估達成率"]:
+        if vs_exp >= 95:
+            light, status = "🟢", "🟢 達標"
+        elif vs_exp >= 90:
+            light, status = "🟡", "🟡 注意"
+        else:
+            light, status = "🔴", "🔴 危險"
+
+        rows.append({
+            "燈號": light, "狀態": status, "區域": region, "門店": store,
+            "本月目標": target, "目前業績": actual_rev, "應有業績": round(expected_rev),
+            "目前達成率": round(actual_rate, 1), "vs應有%": round(vs_exp, 1),
+            "差距": round(actual_rev - expected_rev),
+            "平日日均": round(avg_wday), "假日日均": round(avg_wend),
+        })
+
+    if not rows:
+        st.warning("無有效目標資料"); return
+
+    sp = pd.DataFrame(rows).sort_values("vs應有%", ascending=True)
+
+    green  = len(sp[sp["燈號"] == "🟢"])
+    yellow = len(sp[sp["燈號"] == "🟡"])
+    red    = len(sp[sp["燈號"] == "🔴"])
+    ov_exp  = sp["應有業績"].sum() / sp["本月目標"].sum() * 100 if sp["本月目標"].sum() > 0 else 0
+    ov_act  = sp["目前業績"].sum() / sp["本月目標"].sum() * 100 if sp["本月目標"].sum() > 0 else 0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("🟢 達標", f"{green} 店")
+    c2.metric("🟡 注意", f"{yellow} 店")
+    c3.metric("🔴 危險", f"{red} 店")
+    c4.metric("應有達成率", f"{ov_exp:.1f}%")
+    c5.metric("實際達成率", f"{ov_act:.1f}%", delta=f"{ov_act - ov_exp:+.1f}%")
+
+    # ── 儀表盤（最需關注門店，由低到高取前8）────────────────────────
+    render_section_header("chart-radar", "達標進度儀表盤（最需關注門店）")
+    top8 = sp.head(min(8, len(sp)))
+    cols = st.columns(4)
+    for i, (_, r) in enumerate(top8.iterrows()):
+        color = "#27AE60" if r["燈號"] == "🟢" else ("#FF9800" if r["燈號"] == "🟡" else "#E63B1F")
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=r["vs應有%"],
+            delta={"reference": 100, "valueformat": ".1f",
+                   "increasing": {"color": "#27AE60"}, "decreasing": {"color": "#E63B1F"}},
+            gauge={
+                "axis": {"range": [0, 130], "tickwidth": 1},
+                "bar": {"color": color},
+                "steps": [
+                    {"range": [0, 90], "color": "rgba(230,59,31,0.12)"},
+                    {"range": [90, 95], "color": "rgba(255,152,0,0.12)"},
+                    {"range": [95, 130], "color": "rgba(39,174,96,0.10)"},
+                ],
+                "threshold": {"line": {"color": "#444", "width": 2}, "value": 100},
+            },
+            title={"text": f"{r['燈號']} {r['門店']}"},
+            number={"suffix": "%", "font": {"size": 22}},
+        ))
+        fig.update_layout(height=210, margin=dict(l=10, r=10, t=38, b=5), font={"size": 11})
+        cols[i % 4].plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    # ── 橫向進度條圖 ─────────────────────────────────────────────
+    render_section_header("trending-up", "全店 vs 應有達成率（由低到高）")
+    colors = ["#27AE60" if r >= 95 else ("#FF9800" if r >= 90 else "#E63B1F") for r in sp["vs應有%"]]
+    fig_bar = go.Figure()
+    fig_bar.add_trace(go.Bar(
+        x=sp["門店"], y=sp["vs應有%"], marker_color=colors,
+        text=[f"{r:.0f}%" for r in sp["vs應有%"]], textposition="outside",
+        hovertemplate="<b>%{x}</b><br>vs應有：%{y:.1f}%<extra></extra>",
+    ))
+    fig_bar.add_hline(y=100, line_dash="dash", line_color="#333", annotation_text="應有 100%")
+    fig_bar.add_hline(y=95, line_dash="dot", line_color="#FF9800", annotation_text="黃燈 95%")
+    fig_bar.add_hline(y=90, line_dash="dot", line_color="#E63B1F", annotation_text="紅燈 90%")
+    fig_bar.update_layout(
+        title=f"{yr}年{mn}月 ｜ 平日/假日加權應有達成率對比",
+        height=480, xaxis_tickangle=-45, yaxis_title="vs 應有達成率（%）",
+        yaxis_range=[0, max(sp["vs應有%"].max() * 1.12, 115)],
+    )
+    plotly_chart(fig_bar, key="tg_bar")
+
+    # ── 詳細表格（由低到高）────────────────────────────────────────
+    render_section_header("clipboard-list", "門店達標明細（由低到高排序）")
+    disp = sp[["狀態", "區域", "門店", "本月目標", "目前業績", "應有業績",
+               "目前達成率", "vs應有%", "差距", "平日日均", "假日日均"]].copy()
+    for c in ["本月目標", "目前業績", "應有業績", "差距", "平日日均", "假日日均"]:
+        disp[c] = disp[c].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
+    for c in ["目前達成率", "vs應有%"]:
         disp[c] = disp[c].apply(lambda x: f"{x:.1f}%")
+    disp = disp.rename(columns={"vs應有%": "vs應有達成率"})
     st.dataframe(disp, use_container_width=True, hide_index=True)
+    st.caption(
+        "💡 **計算邏輯**：依本月已過平日/假日天數 × 各店實際平日/假日日均，"
+        "估算「應有業績」。實際業績 ÷ 應有業績 ≥ 95% 🟢、90–95% 🟡、< 90% 🔴"
+    )
 
 
 def page_drill(data):
@@ -1113,7 +1414,16 @@ def page_drill(data):
 
 
 def page_alert(data):
-    st.header("⚠️ 未達日均目標警示")
+    st.header("⚠️ 異常警示")
+
+    # ── Feature 3：即時警示通知列（跑馬燈）────────────────────────
+    st.markdown("#### 📢 即時警示公告欄")
+    with st.spinner("分析資料中..."):
+        alert_items = _generate_alert_items(data)
+    render_marquee(alert_items)
+
+    st.divider()
+    st.subheader("📊 各門店未達日均目標分析")
     filtered, _, _, _, _, _ = get_filter_expander(data, "al")
     ad = filtered.copy()
     ad["當月天數"] = ad["日期"].apply(lambda x: calendar.monthrange(x.year, x.month)[1])
@@ -1161,45 +1471,123 @@ def page_alert(data):
 
 def page_ai(data):
     st.header("🤖 AI 數據分析")
-    st.caption("規則引擎版（免費即時） ｜ 待 Claude API Key 設定後將升級為真 AI 分析")
 
+    # ── 偵測 API Key ──────────────────────────────────────────────
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     try:
         api_key = api_key or st.secrets.get("ANTHROPIC_API_KEY", "")
     except Exception:
         pass
 
-    if api_key:
-        st.success("✅ 偵測到 Anthropic API Key — 真 AI 模式（升級功能開發中）")
+    use_claude = bool(api_key)
+
+    if use_claude:
+        st.success(
+            "✅ **Claude AI 模式** — 偵測到 Anthropic API Key，使用真實 AI 分析（快取 30 分鐘）"
+        )
     else:
-        st.info("💡 目前使用規則引擎分析。設定 `ANTHROPIC_API_KEY` 後自動升級為 Claude 真 AI 分析")
+        st.info(
+            "💡 **規則引擎模式** — 設定 `ANTHROPIC_API_KEY` 後自動升級為 Claude 真 AI 分析"
+        )
 
-    insights = rule_based_ai_analysis(data)
+    # ── 規則引擎分析（永遠執行，作為基準與交叉驗證）─────────────
+    rule_insights = rule_based_ai_analysis(data)
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        render_section_header("bell", "異常偵測")
-        if insights["異常"]:
-            for item in insights["異常"]:
-                st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
-        else:
-            st.success("✅ 未發現異常")
+    # ── Claude 分析（僅在有 API Key 時執行）─────────────────────
+    claude_insights: dict | None = None
+    if use_claude:
+        with st.spinner("🤖 Claude 分析中（首次約需 10-20 秒）..."):
+            summary = _build_data_summary(data)
+            claude_insights = _claude_analysis_cached(summary, api_key)
 
-    with col2:
-        render_section_header("light-bulb", "機會點")
-        if insights["機會"]:
-            for item in insights["機會"]:
-                st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
-        else:
-            st.info("暫無特殊機會點")
+        if claude_insights and "error" in claude_insights:
+            st.error(f"Claude API 呼叫失敗：{claude_insights['error']}")
+            st.warning("自動降級至規則引擎分析結果")
+            claude_insights = None
 
-    with col3:
-        render_section_header("chart-pie", "規範分析")
-        if insights["規範"]:
-            for item in insights["規範"]:
-                st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
-        else:
-            st.info("暫無特殊模式")
+    # ── 顯示分析結果 ───────────────────────────────────────────────
+    if use_claude and claude_insights:
+        # ── Claude 總結橫幅 ──
+        summary_text = claude_insights.get("總結", "")
+        if summary_text:
+            st.markdown(f"""
+<div style="background:linear-gradient(135deg,#FFF8F6,#FFE8DC);
+            border:1.5px solid #FFCBB8;border-left:5px solid #E63B1F;
+            border-radius:12px;padding:1rem 1.4rem;margin-bottom:1rem;">
+  <b style="color:#C1320F;font-size:0.95rem;">🤖 Claude 整體評估</b><br>
+  <span style="color:#333;font-size:0.9rem;">{summary_text}</span>
+</div>""", unsafe_allow_html=True)
+
+        # ── Claude 三欄分析 ──
+        render_section_header("sparkles", "Claude AI 深度分析", badge="真AI")
+        col1, col2, col3 = st.columns(3)
+        categories = [
+            ("異常", col1, "bell", "🚨 異常偵測"),
+            ("機會", col2, "light-bulb", "💡 機會點"),
+            ("規範", col3, "chart-pie", "📐 規範分析"),
+        ]
+        for cat, col, icon, label in categories:
+            with col:
+                render_section_header(icon, label)
+                items = claude_insights.get(cat, [])
+                if items:
+                    for item in items[:5]:
+                        st.markdown(
+                            f"<div class='ai-box'>{item}</div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.success(f"✅ 無{cat}項目")
+
+        # ── 交叉驗證 ──
+        st.divider()
+        render_section_header("check-circle", "規則引擎交叉驗證", badge="對照")
+        st.caption(
+            "以下為規則引擎同步分析結果，可與 Claude 結果相互印證。"
+            "若兩者一致，代表該訊號可信度較高。"
+        )
+        rv1, rv2, rv3 = st.columns(3)
+        for cat, col, label in [
+            ("異常", rv1, "🚨 異常"),
+            ("機會", rv2, "💡 機會"),
+            ("規範", rv3, "📐 規範"),
+        ]:
+            with col:
+                items = rule_insights.get(cat, [])
+                if items:
+                    for item in items[:3]:
+                        clean = item.replace("**", "")
+                        st.markdown(
+                            f"<div class='ai-box' style='font-size:0.78rem;'>{clean}</div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.success(f"✅ 規則引擎無{cat}項目")
+    else:
+        # ── 純規則引擎模式 ──
+        render_section_header("cpu-chip", "規則引擎分析結果")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            render_section_header("bell", "異常偵測")
+            if rule_insights["異常"]:
+                for item in rule_insights["異常"]:
+                    st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
+            else:
+                st.success("✅ 未發現異常")
+        with col2:
+            render_section_header("light-bulb", "機會點")
+            if rule_insights["機會"]:
+                for item in rule_insights["機會"]:
+                    st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
+            else:
+                st.info("暫無特殊機會點")
+        with col3:
+            render_section_header("chart-pie", "規範分析")
+            if rule_insights["規範"]:
+                for item in rule_insights["規範"]:
+                    st.markdown(f"<div class='ai-box'>{item}</div>", unsafe_allow_html=True)
+            else:
+                st.info("暫無特殊模式")
 
     st.divider()
     st.markdown("### 🎓 AI 觀察準則")
@@ -1207,6 +1595,7 @@ def page_ai(data):
     - **異常偵測**：連續 3 天未達日均目標、單日營收暴跌 >30%
     - **機會點**：高客單低來客（推分享活動）、低客單高來客（推套餐）
     - **規範分析**：週期性對比、週末平日效應、成長趨勢判讀
+    - **Claude AI**：自動閱讀所有門店摘要，提供更細緻的文字洞察與建議
     """)
 
 
@@ -1214,7 +1603,7 @@ def page_ai(data):
 # 主程式
 # ============================================================
 def main():
-    from utils.ui_helpers import render_marquee, render_ai_summary, render_section_header, inject_global_css
+    from utils.ui_helpers import render_ai_summary
     inject_global_css()
 
     with st.spinner("載入資料中..."):
