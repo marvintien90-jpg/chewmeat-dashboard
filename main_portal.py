@@ -4,7 +4,11 @@ import os
 from utils.icons import card_icon_html
 from utils.ui_helpers import inject_global_css
 
-ACCESS_KEY = "admin888"
+# 密碼優先讀 st.secrets，本地開發則 fallback 至預設值
+try:
+    ACCESS_KEY = st.secrets.get("admin_password", "admin888")
+except Exception:
+    ACCESS_KEY = "admin888"
 
 # Config paths
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
