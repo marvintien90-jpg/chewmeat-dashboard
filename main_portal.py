@@ -1,6 +1,8 @@
 import streamlit as st
 import json
 import os
+from utils.icons import card_icon_html
+from utils.ui_helpers import inject_global_css
 
 ACCESS_KEY = "admin888"
 
@@ -131,7 +133,7 @@ st.markdown(f"""
         background: linear-gradient(145deg, #7D3C98 0%, #A569BD 100%);
         box-shadow: 0 6px 24px rgba(125,60,152,0.28);
     }}
-    .module-card .icon {{ font-size: 3rem; display: block; margin-bottom: 0.6rem; }}
+    .module-card .icon-wrap {{ display: flex; align-items: center; justify-content: center; margin-bottom: 0.7rem; }}
     .module-card h2 {{ font-size: 1.7rem; margin: 0.3rem 0; font-weight: 800; }}
     .module-card p  {{ font-size: 0.88rem; opacity: 0.88; line-height: 1.6; margin: 0; }}
 
@@ -205,11 +207,11 @@ def show_login():
 # 分頁權限設定（管理員勾選）
 # ============================================================
 ALL_PAGES = {
-    "數據戰情中心": ("pages/1_數據戰情中心.py", "📊", "營收儀表板・門店排行・達標追蹤<br>商圈分析・AI 數據洞察"),
-    "專案追蹤師":   ("pages/2_專案追蹤師.py",   "🗂️", "6 部門跨部門工作進度・審核批示<br>AI 督導摘要・紅黃燈預警"),
-    "決策AI偵察":   ("pages/3_決策AI偵察.py",   "🧠", "跨部門連動診斷・偏差警示<br>逾期任務追蹤・白話報告"),
-    "品牌數位資產": ("pages/4_品牌數位資產.py", "🎨", "活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照"),
-    "系統設定":     ("pages/5_系統設定.py",     "⚙️", "部門 Sheet 連線・密碼管理<br>系統參數設定"),
+    "數據戰情中心": ("pages/1_數據戰情中心.py", "chart-bar",      "營收儀表板・門店排行・達標追蹤<br>商圈分析・AI 數據洞察"),
+    "專案追蹤師":   ("pages/2_專案追蹤師.py",   "clipboard-list", "6 部門跨部門工作進度・審核批示<br>AI 督導摘要・紅黃燈預警"),
+    "決策AI偵察":   ("pages/3_決策AI偵察.py",   "light-bulb",     "跨部門連動診斷・偏差警示<br>逾期任務追蹤・白話報告"),
+    "品牌數位資產": ("pages/4_品牌數位資產.py", "sparkles",       "活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照"),
+    "系統設定":     ("pages/5_系統設定.py",     "cog",            "部門 Sheet 連線・密碼管理<br>系統參數設定"),
 }
 
 CARD_CLASSES = {
@@ -337,6 +339,9 @@ def show_portal():
                 st.session_state.pop(k, None)
             st.rerun()
 
+    # 全域樣式（側欄分隔 + 手機響應式）
+    inject_global_css()
+
     # 主體
     st.markdown('<div class="hq-title">🏢 嗑肉數位總部</div>', unsafe_allow_html=True)
     st.markdown('<div class="hq-subtitle">管理員指揮中心 ｜ 功能別模組導航</div>', unsafe_allow_html=True)
@@ -364,7 +369,7 @@ def show_portal():
             card_html = (
                 f'<div class="module-card {extra_class}" style="position:relative;opacity:{opacity};">'
                 f'{lock_badge}'
-                f'<span class="icon">{icon}</span>'
+                f'<div class="icon-wrap">{card_icon_html(icon, size=40)}</div>'
                 f'<h2>{display_name}</h2>'
                 f'<p>{desc}</p>'
                 f'</div>'

@@ -40,7 +40,10 @@ from utils.brand_scraper import (
     HAS_PYTRENDS, HAS_BS4,
     TAIWAN_PLATFORMS,
 )
-from utils.ui_helpers import render_marquee, render_ai_summary
+from utils.ui_helpers import (
+    render_marquee, render_ai_summary, render_section_header,
+    inject_global_css, PLOTLY_CONFIG, PLOTLY_HOVER_LABEL,
+)
 
 # ── CSS ───────────────────────────────────────────
 st.markdown("""
@@ -50,10 +53,12 @@ st.markdown("""
     [data-testid="stSidebar"] {background: #FAFAFA;}
 
     .section-header {
-        background: #E63B1F; color: white;
-        padding: 7px 16px; border-radius: 8px;
-        margin: 1rem 0 0.5rem; font-weight: 700; font-size: 0.95rem;
+        display: flex; align-items: center; gap: 8px;
+        font-size: 1.0rem; font-weight: 800; color: #1A1A1A;
+        padding: 0.4rem 0; margin: 1.2rem 0 0.6rem;
+        border-bottom: 2px solid #F0F0F0;
     }
+    .section-header svg { flex-shrink: 0; }
     [data-testid="stMetric"] {
         background: #FFFFFF; padding: 14px; border-radius: 10px;
         border: 1.5px solid #F0E8E5;
@@ -124,6 +129,8 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+inject_global_css()  # sidebar separation + mobile responsive
 
 # ── Chart palette ──────────────────────────────────
 CHART_PALETTE = [
@@ -364,7 +371,7 @@ tab1, tab2, tab3 = st.tabs(["🏠 主品牌現況", "⚔️ 競爭品牌對照",
 # ═══════════════════════════════════════════════════
 with tab1:
     # KPI Row
-    st.markdown('<div class="section-header">📊 品牌健康總覽</div>', unsafe_allow_html=True)
+    render_section_header("chart-bar", "品牌健康總覽")
     c1, c2, c3, c4 = st.columns(4)
     review_count = rating_data.get("review_count") or cfg.get("manual_review_count")
     rating_source = rating_data.get("source", "")
@@ -407,7 +414,7 @@ with tab1:
     st.divider()
 
     # 六大品牌健康指標 — Radar + chips
-    st.markdown('<div class="section-header">🔬 六大品牌健康指標</div>', unsafe_allow_html=True)
+    render_section_header("adjustments", "六大品牌健康指標")
     col_radar, col_ind = st.columns([1, 1], gap="large")
 
     with col_radar:
@@ -429,8 +436,9 @@ with tab1:
             showlegend=False, height=360,
             margin=dict(t=30, b=30, l=30, r=30),
             paper_bgcolor="white",
+            dragmode=False,
         )
-        st.plotly_chart(fig_radar, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig_radar, use_container_width=True, config=PLOTLY_CONFIG)
 
     with col_ind:
         for name, ind_data in indicators.items():
@@ -474,7 +482,7 @@ with tab1:
     st.divider()
 
     # 品牌聲量時間趨勢
-    st.markdown('<div class="section-header">📅 品牌聲量時間趨勢</div>', unsafe_allow_html=True)
+    render_section_header("calendar", "品牌聲量時間趨勢")
     trend_data_pts = news_trend.get("data", [])
     if trend_data_pts:
         df_trend = pd.DataFrame(trend_data_pts)
@@ -489,6 +497,7 @@ with tab1:
             marker=dict(size=8, color="#E63B1F"),
             text=df_trend["count"],
             textposition="top center",
+            hovertemplate="<b>%{x}</b><br>提及數：%{y}<extra></extra>",
         )
         fig_trend.update_layout(
             yaxis_title="月度新聞提及數", xaxis_title="月份",
@@ -497,9 +506,12 @@ with tab1:
             xaxis=dict(gridcolor="#F5F5F5"),
             yaxis=dict(gridcolor="#F5F5F5"),
             margin=dict(t=20, b=20),
+            dragmode=False,
+            hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F",
+                            font=dict(size=12, color="white")),
         )
         total_mentions = news_trend.get("total", 0)
-        st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig_trend, use_container_width=True, config=PLOTLY_CONFIG)
         st.caption(f"📊 來源：Google News RSS · 過去6個月共 {total_mentions} 篇新聞提及")
     else:
         st.info("聲量趨勢數據建立中，請稍後重新抓取。")
@@ -513,10 +525,13 @@ with tab1:
             for i, kw in enumerate(kw_cols):
                 if kw in df_tr.columns:
                     fig_tr.add_scatter(name=kw, x=df_tr["date"], y=df_tr[kw], mode="lines",
-                        line=dict(width=2, color=CHART_PALETTE[i % len(CHART_PALETTE)]))
+                        line=dict(width=2, color=CHART_PALETTE[i % len(CHART_PALETTE)]),
+                        hovertemplate=f"<b>{kw}</b><br>%{{x}}<br>搜尋指數：%{{y}}<extra></extra>")
             fig_tr.update_layout(height=260, plot_bgcolor="white", paper_bgcolor="white",
-                legend=dict(orientation="h", y=1.1))
-            st.plotly_chart(fig_tr, use_container_width=True, config={"displayModeBar": False})
+                legend=dict(orientation="h", y=1.1), dragmode=False,
+                hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#4A90E2",
+                                font=dict(size=12, color="white")))
+            st.plotly_chart(fig_tr, use_container_width=True, config=PLOTLY_CONFIG)
     else:
         trends_err = trends_data.get("error", "")
         if trends_err:
@@ -542,8 +557,7 @@ with tab1:
         rising_list = ai_kw.get("rising", [])
         _kw_source = ai_kw.get("source", "AI生成")
 
-    _kw_badge_html = f' <span style="background:#E8F8F5;color:#1E8449;border:1px solid #A9DFBF;border-radius:4px;padding:1px 7px;font-size:0.72rem;font-weight:600;">{_kw_source}</span>'
-    st.markdown(f'<div class="section-header">🏷️ 品牌相關關鍵字{_kw_badge_html}</div>', unsafe_allow_html=True)
+    render_section_header("key", "品牌相關關鍵字", badge=_kw_source)
 
     col_top, col_rising = st.columns(2, gap="large")
     with col_top:
@@ -574,7 +588,7 @@ with tab1:
     st.divider()
 
     # YouTube 品牌曝光
-    st.markdown('<div class="section-header">▶️ YouTube 品牌曝光</div>', unsafe_allow_html=True)
+    render_section_header("play-circle", "YouTube 品牌曝光")
     yt_videos = youtube_data.get("videos", [])
     if yt_videos:
         st.caption(f"找到 {youtube_data.get('count', 0)} 部相關影片（YouTube RSS）")
@@ -590,7 +604,7 @@ with tab1:
     st.divider()
 
     # 品牌新聞動態
-    st.markdown('<div class="section-header">📰 品牌新聞動態</div>', unsafe_allow_html=True)
+    render_section_header("newspaper", "品牌新聞動態")
     brand_news = fetch_google_news(brand_name, num=10)
     articles_sent = sentiment.get("articles", [])
     # Merge sentiment info into brand_news if available
@@ -622,7 +636,7 @@ with tab1:
 # TAB 2 — 競爭品牌對照
 # ═══════════════════════════════════════════════════
 with tab2:
-    st.markdown('<div class="section-header">⚔️ 競品搜尋聲量比較</div>', unsafe_allow_html=True)
+    render_section_header("arrows-right-left", "競品搜尋聲量比較")
 
     if trends_data.get("available") and trends_data.get("df"):
         df_tr_all = pd.DataFrame(trends_data["df"])
@@ -641,30 +655,38 @@ with tab2:
                 marker_color=bar_colors,
                 text=df_avg["平均搜尋量"],
                 textposition="outside",
+                hovertemplate="<b>%{x}</b><br>平均搜尋指數：%{y:.1f}<extra></extra>",
             ))
             fig_cmp.update_layout(
                 title="搜尋聲量對比（平均指數）", yaxis_title="平均搜尋量指數",
                 plot_bgcolor="white", paper_bgcolor="white",
                 height=320, font_family="sans-serif",
+                dragmode=False,
+                hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F",
+                                font=dict(size=12, color="white")),
             )
-            st.plotly_chart(fig_cmp, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_cmp, use_container_width=True, config=PLOTLY_CONFIG)
 
             st.divider()
 
             # Pie: search share
-            st.markdown('<div class="section-header">📊 搜尋聲量份額</div>', unsafe_allow_html=True)
+            render_section_header("chart-pie", "搜尋聲量份額")
             fig_pie = go.Figure(go.Pie(
                 labels=df_avg["品牌/關鍵字"].tolist(),
                 values=df_avg["平均搜尋量"].tolist(),
                 marker_colors=CHART_PALETTE[:len(df_avg)],
                 textinfo="label+percent",
                 hole=0.35,
+                hovertemplate="<b>%{label}</b><br>搜尋份額：%{percent}<br>指數：%{value:.1f}<extra></extra>",
             ))
             fig_pie.update_layout(
                 height=320, margin=dict(t=20, b=10, l=10, r=10),
                 paper_bgcolor="white", showlegend=True,
+                dragmode=False,
+                hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F",
+                                font=dict(size=12, color="white")),
             )
-            st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_pie, use_container_width=True, config=PLOTLY_CONFIG)
         else:
             st.info("需要至少設定一個競品才能顯示對比圖表。請在側邊欄品牌設定中新增競品。")
     else:
@@ -673,7 +695,7 @@ with tab2:
     st.divider()
 
     # 各競品最新動態
-    st.markdown('<div class="section-header">📰 各競品最新動態</div>', unsafe_allow_html=True)
+    render_section_header("newspaper", "各競品最新動態")
     if comp_news:
         brand_news_map = {}
         for art in comp_news:
@@ -704,7 +726,7 @@ with tab2:
     st.divider()
 
     # 競品指標比較表
-    st.markdown('<div class="section-header">📋 競品指標比較表</div>', unsafe_allow_html=True)
+    render_section_header("clipboard-list", "競品指標比較表")
     st.caption("六維指標綜合分數（0–100）。搜尋熱度來自 Google Trends，口碑聲量／情感分數來自 Google News，評分指數來自 Google 評分換算。")
 
     ind_names_list = list(indicators.keys())
@@ -737,7 +759,7 @@ with tab2:
 
     # Competitor Radar Chart
     st.divider()
-    st.markdown('<div class="section-header">🕸️ 競品六維雷達對比</div>', unsafe_allow_html=True)
+    render_section_header("chart-radar", "競品六維雷達對比")
 
     radar_dims = ["口碑聲量", "情感分數", "評分指數"]
     own_vals = [indicators[d]["score"] for d in radar_dims]
@@ -783,8 +805,9 @@ with tab2:
         height=380,
         margin=dict(t=30, b=60, l=30, r=30),
         paper_bgcolor="white",
+        dragmode=False,
     )
-    st.plotly_chart(fig_radar_comp, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig_radar_comp, use_container_width=True, config=PLOTLY_CONFIG)
     st.caption("雷達對比維度：口碑聲量（Google News 提及數）、情感分數（正面評論佔比）、評分指數（Google評分換算）。「—」代表數據未取得，以0分繪製。")
 
     # Show ratings and news for competitors
@@ -807,7 +830,7 @@ with tab2:
 # ═══════════════════════════════════════════════════
 with tab3:
     # 台灣各平台聲量分佈
-    st.markdown('<div class="section-header">🌐 台灣各平台聲量分佈</div>', unsafe_allow_html=True)
+    render_section_header("globe-alt", "台灣各平台聲量分佈")
     platform_counts = platform_data.get("platforms", {})
     if platform_counts:
         df_plat = pd.DataFrame([
@@ -822,14 +845,18 @@ with tab3:
                 marker=dict(color=_plat_colors),
                 text=df_plat["文章數"],
                 textposition="outside",
+                hovertemplate="<b>%{y}</b><br>文章數：%{x}<extra></extra>",
             ))
             fig_plat.update_layout(
                 title=f"台灣平台聲量（共 {platform_data.get('total',0)} 篇）",
                 xaxis_title="文章數", height=360,
                 plot_bgcolor="white", paper_bgcolor="white",
                 font_family="sans-serif",
+                dragmode=False,
+                hoverlabel=dict(bgcolor="rgba(30,30,30,0.88)", bordercolor="#E63B1F",
+                                font=dict(size=12, color="white")),
             )
-            st.plotly_chart(fig_plat, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_plat, use_container_width=True, config=PLOTLY_CONFIG)
         else:
             st.info("各平台目前無相關文章，品牌聲量有待提升。")
     else:
@@ -838,7 +865,7 @@ with tab3:
     st.divider()
 
     # 跨平台中位數情感分析 — Gauge
-    st.markdown('<div class="section-header">📊 跨平台中位數情感分析</div>', unsafe_allow_html=True)
+    render_section_header("face-smile", "跨平台中位數情感分析")
     median_sent = platform_stats.get("median_sentiment", 0)
     col_g, col_g2 = st.columns([1, 2], gap="large")
     with col_g:
@@ -863,8 +890,9 @@ with tab3:
         fig_gauge.update_layout(
             height=250, margin=dict(t=30, b=10, l=20, r=20),
             paper_bgcolor="white",
+            dragmode=False,
         )
-        st.plotly_chart(fig_gauge, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig_gauge, use_container_width=True, config=PLOTLY_CONFIG)
         st.caption(f"基於 {platform_stats.get('total_volume', 0)} 篇跨平台文章計算")
     with col_g2:
         pb = platform_stats.get("platform_breakdown", {})
@@ -889,7 +917,7 @@ with tab3:
     st.divider()
 
     # AI 診斷報告
-    st.markdown('<div class="section-header">🤖 AI 品牌健康診斷報告</div>', unsafe_allow_html=True)
+    render_section_header("cpu-chip", "AI 品牌健康診斷報告")
 
     if ai_diagnosis.get("ai_powered"):
         st.success("🤖 本報告由 Claude AI 自動分析生成")
@@ -941,7 +969,7 @@ with tab3:
     st.divider()
 
     # 各平台文章列表（可展開）
-    st.markdown('<div class="section-header">📋 各平台文章列表</div>', unsafe_allow_html=True)
+    render_section_header("clipboard-list", "各平台文章列表")
     plat_articles = platform_stats.get("articles", platform_data.get("articles", []))
     if plat_articles:
         # Group by platform
