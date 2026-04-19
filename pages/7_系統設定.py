@@ -58,6 +58,66 @@ st.markdown("# ⚙️ 系統設定")
 st.markdown("連線狀態確認、資料夾設定、快取清理與資料管理")
 st.divider()
 
+# ── Google Drive 資料夾設定（最高優先，頂部顯示）─────────────
+st.markdown('<div class="section-header">📁 Google Drive 連動資料夾設定</div>', unsafe_allow_html=True)
+
+_default_folder = ""
+try:
+    from lib.config import get_drive_folder_id
+    _default_folder = get_drive_folder_id()
+except Exception:
+    pass
+
+_current_folder = st.session_state.get("import_folder_id", _default_folder)
+
+col_folder_input, col_folder_status = st.columns([3, 1])
+with col_folder_input:
+    _raw_folder = st.text_input(
+        "Google Drive 資料夾網址或 ID",
+        value=_current_folder,
+        placeholder="貼入 Google Drive 資料夾的完整網址，或直接輸入資料夾 ID…",
+        help="在 Google Drive 開啟目標資料夾，複製網址列完整 URL 貼入此處，系統自動解析 ID",
+        label_visibility="collapsed",
+    )
+
+# 自動從 URL 解析 ID
+_folder_id = _raw_folder.strip()
+if "folders/" in _folder_id:
+    _folder_id = _folder_id.split("folders/")[-1].split("?")[0].split("/")[0].strip()
+
+with col_folder_status:
+    if _folder_id:
+        st.session_state["import_folder_id"] = _folder_id
+        _display = _folder_id[:16] + "…" if len(_folder_id) > 16 else _folder_id
+        st.success(f"✅ `{_display}`")
+    else:
+        st.warning("尚未設定")
+
+if _folder_id:
+    st.caption(f"📂 已連動資料夾 ID：`{_folder_id}`　→　前往 [匯入管理](pages/4_匯入管理.py) 開始掃描")
+else:
+    st.info("👆 請貼入 Google Drive 資料夾網址（例：`https://drive.google.com/drive/folders/XXXXXX`）")
+
+    with st.expander("📖 如何取得 Google Drive 資料夾網址？"):
+        st.markdown("""
+1. 開啟 [Google Drive](https://drive.google.com)
+2. 找到要連動的資料夾，點選進入
+3. 複製瀏覽器網址列中的完整 URL
+4. 貼入上方輸入框，系統自動解析資料夾 ID
+
+**支援格式：**
+- `https://drive.google.com/drive/folders/1ABC...XYZ`
+- `https://drive.google.com/drive/u/0/folders/1ABC...XYZ`
+- 或直接輸入資料夾 ID（英數字串）
+
+**連動後可掃描的文件類型：**
+- Google 文件（Docs）
+- Word 文件（.docx / .doc）
+- 遞迴掃描所有子資料夾
+        """)
+
+st.divider()
+
 # ── 連線狀態 ─────────────────────────────────────────────────
 st.markdown('<div class="section-header">🔌 連線狀態診斷</div>', unsafe_allow_html=True)
 
@@ -134,16 +194,11 @@ with col_a:
 
 with col_b:
     st.markdown("**Drive 資料夾**")
-    try:
-        from lib.config import get_drive_folder_id
-        fid = get_drive_folder_id()
-        st.markdown(f'<div class="info-row">📁 預設資料夾 ID：<code>{fid[:20]}…</code></div>', unsafe_allow_html=True)
-    except Exception:
-        st.markdown('<div class="info-row">📁 未設定預設資料夾（可在匯入管理頁臨時指定）</div>', unsafe_allow_html=True)
-
     session_folder = st.session_state.get("import_folder_id", "")
     if session_folder:
-        st.markdown(f'<div class="info-row">📂 本次工作階段資料夾：<code>{session_folder[:20]}…</code></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="info-row">📂 已連動資料夾：<code>{session_folder[:22]}…</code></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="info-row">📁 尚未設定（請至頁面頂部輸入資料夾網址）</div>', unsafe_allow_html=True)
 
 st.divider()
 
