@@ -32,6 +32,7 @@ DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 DOC_MIME = 'application/msword'
 FOLDER_MIME = 'application/vnd.google-apps.folder'
 GDOC_MIME = 'application/vnd.google-apps.document'
+PDF_MIME = 'application/pdf'
 
 DRIVE_SCOPES = [
     'https://www.googleapis.com/auth/drive',
