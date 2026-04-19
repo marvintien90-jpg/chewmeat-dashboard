@@ -8,6 +8,7 @@ import re
 import calendar
 import io
 import os
+import requests
 
 warnings.filterwarnings("ignore")
 
@@ -145,7 +146,9 @@ st.markdown("""
 def load_sheet(year_month, gid):
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
     try:
-        raw = pd.read_csv(url, header=None)
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        raw = pd.read_csv(io.StringIO(resp.text), header=None)
     except Exception:
         return pd.DataFrame()
 

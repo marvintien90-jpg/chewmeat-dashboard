@@ -80,14 +80,13 @@ st.markdown("""
 # 側邊欄
 # ──────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🧠 智能戰情室")
+    st.markdown("## 🧠 決策AI偵察")
     st.caption("跨部門連動診斷中樞")
     st.divider()
-    st.page_link("app.py",              label="🏢 返回總部大門")
-    st.page_link("pages/1_營收看板.py",  label="📊 財務部 — 營收看板")
-    st.page_link("pages/2_專案進度.py",  label="🗂️ 營運部 — 專案進度")
-    st.page_link("pages/5_品牌行銷部.py", label="🎨 品牌行銷部")
-    st.page_link("pages/6_市場情報部.py", label="🔍 市場情報部")
+    st.page_link("main_portal.py",                    label="🏢 返回總部大門")
+    st.page_link("pages/1_數據戰情中心.py",            label="📊 數據戰情中心")
+    st.page_link("pages/2_專案追蹤師.py",              label="🗂️ 專案追蹤師")
+    st.page_link("pages/4_品牌數位資產.py",            label="🎨 品牌數位資產")
     st.divider()
     lookback = st.selectbox("比對區間", [1, 2, 3], index=1, format_func=lambda x: f"近 {x} 個月")
     if st.button("🔄 重新診斷", use_container_width=True):
@@ -97,7 +96,7 @@ with st.sidebar:
 # ──────────────────────────────────────────────
 # 標題
 # ──────────────────────────────────────────────
-st.markdown("# 🧠 智能戰情室")
+st.markdown("# 🧠 決策AI偵察")
 st.markdown("**跨部門連動診斷** — 自動偵測營收偏差與逾期任務，產出白話診斷報告")
 st.divider()
 
@@ -123,7 +122,7 @@ overdue   = get_overdue_projects(df_proj)
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("⚠️ 營收異常門店", len(anomalies), delta=None)
 col2.metric("📋 逾期任務數", len(overdue), delta=None)
-col3.metric("✅ 執行中專案", len(df_proj[df_proj["狀態"] == "執行中"]))
+col3.metric("✅ 執行中專案", len(df_proj[df_proj["狀態"] == "執行中"]) if "狀態" in df_proj.columns else 0)
 total_stores = df_rev["店名"].nunique() if not df_rev.empty else "—"
 col4.metric("🏪 監控門店數", total_stores)
 

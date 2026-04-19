@@ -215,14 +215,16 @@ def show_portal():
         locked = page_name not in enabled_now
         with col:
             lock_badge = '<span style="position:absolute;top:12px;right:16px;font-size:1.4rem;">🔒</span>' if locked else ''
-            st.markdown(f"""
-            <div class="module-card {extra_class}" style="position:relative;opacity:{'0.5' if locked else '1'};">
-                {lock_badge}
-                <span class="icon">{icon}</span>
-                <h2>{page_name}</h2>
-                <p>{desc}</p>
-            </div>
-            """, unsafe_allow_html=True)
+            opacity = '0.5' if locked else '1'
+            card_html = (
+                f'<div class="module-card {extra_class}" style="position:relative;opacity:{opacity};">'
+                f'{lock_badge}'
+                f'<span class="icon">{icon}</span>'
+                f'<h2>{page_name}</h2>'
+                f'<p>{desc}</p>'
+                f'</div>'
+            )
+            st.markdown(card_html, unsafe_allow_html=True)
             if not locked:
                 st.page_link(path, label=f"→ 進入 {page_name}", use_container_width=True)
             else:

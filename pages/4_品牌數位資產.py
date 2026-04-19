@@ -60,10 +60,10 @@ with st.sidebar:
     st.markdown("## 🎨 品牌行銷部")
     st.caption("活動成效 × 營收增長分析")
     st.divider()
-    st.page_link("app.py",               label="🏢 返回總部大門")
-    st.page_link("pages/1_營收看板.py",   label="📊 財務部 — 營收看板")
-    st.page_link("pages/3_智能戰情室.py", label="🧠 智能戰情室")
-    st.page_link("pages/6_市場情報部.py", label="🔍 市場情報部")
+    st.page_link("main_portal.py",                    label="🏢 返回總部大門")
+    st.page_link("pages/1_數據戰情中心.py",            label="📊 數據戰情中心")
+    st.page_link("pages/2_專案追蹤師.py",              label="🗂️ 專案追蹤師")
+    st.page_link("pages/3_決策AI偵察.py",              label="🧠 決策AI偵察")
 
 # ──────────────────────────────────────────────
 # 標題

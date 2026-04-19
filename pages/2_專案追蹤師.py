@@ -271,28 +271,27 @@ if red_items:
         css_cls = "yellow" if light == "🟡" else ""
         reason = _build_reason(item)
         deadline_str = f"截止：{item['截止日期']}" if item.get("截止日期") else "無截止日"
-        items_html += f"""
-        <div class="ai-item {css_cls}">
-            <div>
-                <span class="ai-item-dept">{light} #{rank} · {item['來源部門']}部</span>
-                <span class="task-tag tag-overdue" style="margin-left:6px;">{item['處理狀態']}</span>
-            </div>
-            <div class="ai-item-task">{item['任務項目']}</div>
-            <div class="ai-item-meta">
-                👤 {item['負責人'] or '—'} ｜ {deadline_str} ｜ 進度 {item['目前進度']}% ｜ {reason}
-            </div>
-        </div>
-        """
+        items_html += (
+            f'<div class="ai-item {css_cls}">'
+            f'<div>'
+            f'<span class="ai-item-dept">{light} #{rank} · {item["來源部門"]}部</span>'
+            f'<span class="task-tag tag-overdue" style="margin-left:6px;">{item["處理狀態"]}</span>'
+            f'</div>'
+            f'<div class="ai-item-task">{item["任務項目"]}</div>'
+            f'<div class="ai-item-meta">'
+            f'👤 {item["負責人"] or "—"} ｜ {deadline_str} ｜ 進度 {item["目前進度"]}% ｜ {reason}'
+            f'</div>'
+            f'</div>'
+        )
 
-    st.markdown(f"""
-    <div class="ai-summary-box">
-        <div class="ai-summary-title">🤖 AI 督導摘要 — 需要總指揮立即介入的 {len(red_items)} 個紅燈項目</div>
-        {items_html}
-        <div style="font-size:0.76rem;color:#999;margin-top:0.6rem;">
-        ⏱ 資料快取至每日 08:00 更新 · 點擊「審核批示」頁籤可直接批示
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    footer = '<div style="font-size:0.76rem;color:#999;margin-top:0.6rem;">⏱ 資料快取至每日 08:00 更新 · 點擊「審核批示」頁籤可直接批示</div>'
+    st.markdown(
+        f'<div class="ai-summary-box">'
+        f'<div class="ai-summary-title">🤖 AI 督導摘要 — 需要總指揮立即介入的 {len(red_items)} 個紅燈項目</div>'
+        f'{items_html}{footer}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 else:
     st.success("✅ 目前無紅燈任務，各部門工作進展正常")
 
@@ -355,19 +354,15 @@ if view_mode == "📋 卡片視圖":
             dept     = str(row.get("來源部門", "")) or "—"
             task     = str(row.get("任務項目", "（無標題）"))
 
-            st.markdown(f"""
-            <div class="task-card {card_cls}">
-              <div class="task-title">{light} {task}</div>
-              <div class="task-meta">
-                {tag_html}
-                🏢 {dept} ｜ 👤 {owner} ｜ 📅 {deadline}
-              </div>
-              <div class="prog-bg">
-                <div class="prog-fill {prog_cls}" style="width:{min(prog,100)}%;"></div>
-              </div>
-              <div class="task-meta" style="text-align:right;margin-top:2px;">{prog}%</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="task-card {card_cls}">'
+                f'<div class="task-title">{light} {task}</div>'
+                f'<div class="task-meta">{tag_html} 🏢 {dept} ｜ 👤 {owner} ｜ 📅 {deadline}</div>'
+                f'<div class="prog-bg"><div class="prog-fill {prog_cls}" style="width:{min(prog,100)}%;"></div></div>'
+                f'<div class="task-meta" style="text-align:right;margin-top:2px;">{prog}%</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
 # ──────────────────────────────────────────────
 # 視圖二：統計分析
@@ -456,14 +451,13 @@ else:
             tag_html  = STATUS_TAG.get(status, "")
 
             with st.container():
-                st.markdown(f"""
-                <div class="task-card {card_cls}">
-                  <div class="task-title">{light} {task}</div>
-                  <div class="task-meta">
-                    {tag_html} 🏢 {dept} ｜ 👤 {owner} ｜ 📅 {deadline} ｜ {prog}%
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="task-card {card_cls}">'
+                    f'<div class="task-title">{light} {task}</div>'
+                    f'<div class="task-meta">{tag_html} 🏢 {dept} ｜ 👤 {owner} ｜ 📅 {deadline} ｜ {prog}%</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
                 if sheet_id and row_index > 0:
                     with st.expander("📝 展開批示面板", expanded=False):

@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 import re
+import io
+import requests
 from typing import Optional, List
 import pandas as pd
 import streamlit as st
@@ -74,7 +76,9 @@ def align_store_names(df_a: pd.DataFrame, df_b: pd.DataFrame,
 def load_revenue_sheet(year_month: str, gid: str) -> pd.DataFrame:
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
     try:
-        raw = pd.read_csv(url, header=None)
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        raw = pd.read_csv(io.StringIO(resp.text), header=None)
     except Exception:
         return pd.DataFrame()
 
