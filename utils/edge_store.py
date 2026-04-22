@@ -557,6 +557,26 @@ def get_unrecognized_groups() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_group_recent_messages(group_id: str, limit: int = 5) -> list[dict]:
+    """取得指定群組最近幾筆訊息內容，供辨識店別用。"""
+    with _conn() as db:
+        rows = db.execute(
+            """SELECT raw_text, line_user_id, received_at
+               FROM webhook_cache
+               WHERE group_id = ?
+               ORDER BY received_at DESC
+               LIMIT ?""",
+            (group_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def dismiss_unrecognized_group(group_id: str) -> None:
+    """將指定群組的 webhook_cache 紀錄全數刪除（略過不綁定）。"""
+    with _conn() as db:
+        db.execute("DELETE FROM webhook_cache WHERE group_id = ?", (group_id,))
+
+
 # ── Settings（系統設定 / 推播去重）────────────────────────────────
 def get_setting(key: str) -> Optional[str]:
     """取得系統設定值，不存在則回傳 None"""

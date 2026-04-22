@@ -1613,28 +1613,58 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
     # ──────────────────────────────────────────────────────────────
     with tab_line:
         st.markdown("#### 📡 LINE API 設定")
-        st.caption("設定 LINE Messaging API 金鑰，啟用 Webhook 接收與戰報推播功能。")
+
+        # ── 如何取得各欄位說明 ─────────────────────────────────────
+        with st.expander("📖 各欄位如何取得？（點我展開）", expanded=False):
+            st.markdown("""
+**① Channel Secret & Channel Access Token**
+1. 前往 [LINE Developers Console](https://developers.line.biz/console/)
+2. 選擇你的 Provider → 選擇 Messaging API Channel
+3. **Basic settings** 頁面 → 找到 `Channel secret`（點 Issue 或直接複製）
+4. **Messaging API** 頁面 → 滑到最底 → `Channel access token` → 點 **Issue**
+
+---
+
+**② Commander User ID（總指揮的 LINE User ID，格式 U + 32碼）**
+
+**最簡單方式：**
+1. 在 LINE 上找到你的 Bot（嗑肉總部小幫手）
+2. 直接傳送一則訊息給 Bot（1 對 1 聊天，不是群組）
+3. 回到本 App → **群組綁定** 頁籤 → 查看「未辨識群組」，或前往「開發者工具」查看 Webhook 紀錄
+4. 你的 User ID 會以 `U` 開頭出現
+
+**或透過 Webhook 日誌：**
+1. Webhook 伺服器收到訊息後，JSON 中 `source.userId` 欄位就是 User ID
+
+---
+
+**③ Webhook 伺服器 URL**
+- 本機開發：使用 [ngrok](https://ngrok.com/) 生成臨時 URL
+- 正式部署：填入 Render / Railway / 其他主機的 HTTPS URL
+- 格式：`https://your-domain.com/webhook`
+""")
 
         with st.form("line_api_form"):
             cfg_secret = st.text_input(
-                "Channel Secret",
+                "① Channel Secret",
                 value=edge_store.get_setting("app_cfg_LINE_CHANNEL_SECRET") or "",
                 type="password",
                 placeholder="留空則不更新",
             )
             cfg_token = st.text_input(
-                "Channel Access Token",
+                "① Channel Access Token",
                 value=edge_store.get_setting("app_cfg_LINE_CHANNEL_ACCESS_TOKEN") or "",
                 type="password",
                 placeholder="留空則不更新",
             )
             cfg_commander = st.text_input(
-                "Commander User ID（總指揮 Line User ID）",
+                "② Commander User ID（你的 LINE User ID，U 開頭 32 碼）",
                 value=edge_store.get_setting("app_cfg_LINE_COMMANDER_USER_ID") or "",
-                placeholder="Uxxxxxxxxxxxxxxxx",
+                placeholder="Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                help="傳訊息給 Bot 後，在群組綁定頁查看未辨識來源即可找到",
             )
             cfg_webhook_url = st.text_input(
-                "Webhook 伺服器 URL",
+                "③ Webhook 伺服器 URL",
                 value=edge_store.get_setting("app_cfg_LINE_WEBHOOK_SERVER_URL") or "",
                 placeholder="https://your-server.com/webhook",
             )
@@ -1682,52 +1712,111 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
     with tab_groups:
         st.markdown("#### 🔗 群組 → 門店 綁定")
 
+        # ── 如何取得 Group ID 說明 ─────────────────────────────────
+        with st.expander("📖 如何取得 LINE 群組 ID？（點我展開）", expanded=False):
+            st.markdown("""
+**LINE 群組 ID 格式**：`C` 開頭，後接 32 碼英數字，例如 `Cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+
+**取得方法（最簡單）：**
+1. 將 Bot（嗑肉總部小幫手）**加入目標 LINE 群組**
+2. 在群組中任意傳送一則訊息（任何內容都可以）
+3. 回到本頁面 → 「未辨識群組」區塊會自動出現該群組的 ID
+4. 選擇對應門店並點「綁定」即可
+
+> 💡 群組 ID 不會在 LINE App 介面上直接顯示，只能透過 Webhook 取得。
+
+**`sim_group` 是什麼？**
+開發者工具的「隨機模擬 Webhook」會產生假的 `sim_group` 紀錄，這不是真實 LINE 群組。
+可直接點「🗑️ 刪除」移除。
+""")
+
         _sl_groups = get_store_list()
         if not _sl_groups:
             st.warning("⚠️ 請先至「🏪 門店管理」新增門店，才能進行群組綁定。")
 
-        # 未辨識群組快速綁定
+        # ── 未辨識群組快速綁定 ────────────────────────────────────
         unrecognized = edge_store.get_unrecognized_groups()
         if unrecognized:
             with st.expander(f"🔍 未辨識群組 ({len(unrecognized)}) — 快速綁定", expanded=True):
-                st.caption("以下群組傳來訊息但尚未綁定門店，請快速綁定以啟動分類。")
-                for g in unrecognized:
-                    gid_short = g["group_id"][:16] + "..."
-                    st.markdown(f"**`{gid_short}`**")
-                    st.caption(f"訊息數：{g['msg_count']} · 最後：{g['last_seen'][:16]}")
-                    cb_col, btn_col = st.columns([3, 1])
-                    quick_store = cb_col.selectbox(
-                        "門店", ["(略過)"] + _sl_groups,
-                        key=f"quick_{g['group_id']}"
-                    )
-                    if btn_col.button("綁定", key=f"qbind_{g['group_id']}",
-                                      disabled=(quick_store == "(略過)")):
-                        edge_store.upsert_line_group(g["group_id"], quick_store)
-                        st.toast(f"✅ {gid_short} → {quick_store}")
-                        st.rerun()
-                    st.divider()
+                st.caption("以下群組傳來訊息但尚未綁定門店。查看最近訊息以辨識是哪間門店，再選擇對應門店綁定。")
 
-        # 已綁定群組列表
-        st.markdown("#### 已綁定群組")
+                for g in unrecognized:
+                    gid = g["group_id"]
+                    gid_short = gid[:20] + "..."
+                    is_sim = gid.startswith("sim_")
+
+                    # 標題列
+                    h1, h2 = st.columns([6, 1])
+                    if is_sim:
+                        h1.markdown(f"🔧 **`{gid_short}`** — 模擬測試群組（非真實 LINE 群組）")
+                    else:
+                        h1.markdown(f"📱 **`{gid_short}`**")
+                    h1.caption(f"訊息數：{g['msg_count']} · 最後活動：{g['last_seen'][:16]}")
+
+                    # 刪除按鈕
+                    if h2.button("🗑️ 刪除", key=f"dismiss_{gid}", type="secondary",
+                                  help="移除此未辨識群組紀錄"):
+                        edge_store.dismiss_unrecognized_group(gid)
+                        st.toast(f"✅ 已刪除群組紀錄：{gid_short}")
+                        st.rerun()
+
+                    # 最近訊息預覽（幫助辨識是哪間店）
+                    recent_msgs = edge_store.get_group_recent_messages(gid, limit=3)
+                    if recent_msgs:
+                        with st.expander(f"💬 最近 {len(recent_msgs)} 則訊息（點我展開辨識門店）"):
+                            for m in recent_msgs:
+                                sender = m.get("line_user_id", "未知")[:12] + "..."
+                                ts     = m.get("received_at", "")[:16]
+                                text   = m.get("raw_text", "（空）")[:80]
+                                st.markdown(f"- `{ts}` **{sender}**：{text}")
+
+                    # 綁定操作（模擬群組也可綁定，但提示）
+                    if not is_sim:
+                        cb_col, btn_col = st.columns([3, 1])
+                        quick_store = cb_col.selectbox(
+                            "選擇對應門店",
+                            ["(略過)"] + _sl_groups,
+                            key=f"quick_{gid}",
+                        )
+                        if btn_col.button("✅ 綁定", key=f"qbind_{gid}",
+                                          disabled=(quick_store == "(略過)"),
+                                          type="primary"):
+                            edge_store.upsert_line_group(gid, quick_store)
+                            st.toast(f"✅ {gid_short} → {quick_store}")
+                            st.rerun()
+                    else:
+                        st.info("此為模擬測試群組，請點右上角「🗑️ 刪除」移除，或忽略。")
+
+                    st.divider()
+        else:
+            st.info(
+                "📭 目前無未辨識群組。\n\n"
+                "將 Bot 加入 LINE 群組後，群組傳訊息即會自動出現在這裡。"
+            )
+
+        # ── 已綁定群組列表 ────────────────────────────────────────
+        st.markdown("#### ✅ 已綁定群組")
         groups = edge_store.load_line_groups()
         if groups:
             for g in groups:
-                c1, c2, c3 = st.columns([4, 4, 1])
-                c1.caption(f"`{g['group_id'][:20]}...`")
-                c2.caption(g["store_name"])
-                if c3.button("✕", key=f"del_grp_{g['group_id']}", help="刪除此對應"):
+                c1, c2, c3 = st.columns([5, 3, 1])
+                c1.caption(f"`{g['group_id'][:24]}...`")
+                c2.caption(f"🏪 {g['store_name']}")
+                if c3.button("✕", key=f"del_grp_{g['group_id']}", help="解除此群組綁定"):
                     edge_store.delete_line_group(g["group_id"])
                     st.rerun()
         else:
-            st.caption("尚無已綁定群組")
+            st.caption("尚無已綁定群組 — 請先在上方「未辨識群組」中選擇門店並綁定")
 
-        # 手動新增
-        st.markdown("#### ➕ 手動新增對應")
+        # ── 手動新增（知道 Group ID 的進階操作）─────────────────────
+        st.divider()
+        st.markdown("#### ➕ 手動新增綁定（已知 Group ID）")
+        st.caption("如果已知 LINE 群組 ID，可在此直接填入。")
         col_gid, col_store = st.columns([2, 2])
         new_gid = col_gid.text_input(
-            "Line 群組 ID (C 開頭)",
+            "LINE 群組 ID (C 開頭)",
             key="edge_new_gid",
-            placeholder="C1234567890abcdef...",
+            placeholder="Cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         )
         if _sl_groups:
             new_store = col_store.selectbox(
@@ -1736,7 +1825,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
                 key="edge_new_store",
             )
         else:
-            new_store = col_store.text_input(
+            col_store.text_input(
                 "對應門店名稱",
                 key="edge_new_store_txt",
                 placeholder="請先至門店管理新增門店",
@@ -1746,7 +1835,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
         if st.button("新增綁定", use_container_width=False, key="edge_add_group"):
             if new_gid.strip() and new_store:
                 edge_store.upsert_line_group(new_gid.strip(), new_store)
-                st.success(f"✅ {new_gid[:20]}... → {new_store}")
+                st.success(f"✅ 已新增：{new_gid[:24]}... → {new_store}")
                 st.rerun()
             elif not new_gid.strip():
                 st.warning("請輸入群組 ID")
