@@ -92,6 +92,14 @@ def init_db() -> None:
             close_note     TEXT    DEFAULT '',
             archived_at    TEXT    NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS line_groups (
+            group_id    TEXT    PRIMARY KEY,
+            store_name  TEXT    NOT NULL,
+            bot_name    TEXT    DEFAULT '',
+            created_at  TEXT    NOT NULL,
+            updated_at  TEXT    NOT NULL
+        );
         """)
     # v3 欄位 Migration（idempotent）
     _migrate_v3()
@@ -469,3 +477,53 @@ def get_overdue_red_events(hours: int = 4) -> list[dict]:
             (cutoff,)
         ).fetchall()
     return [_evt_from_row(dict(r)) for r in rows]
+
+
+# ── Line 群組→門店 對應表 ─────────────────────────────────────────
+def upsert_line_group(group_id: str, store_name: str,
+                       bot_name: str = "") -> None:
+    """
+    新增或更新 Line 群組→門店對應。
+    支援從 Streamlit UI 或 Webhook 事件觸發更新。
+    """
+    now = datetime.now().isoformat()
+    with _conn() as db:
+        db.execute(
+            """INSERT INTO line_groups (group_id, store_name, bot_name, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(group_id)
+               DO UPDATE SET store_name=excluded.store_name,
+                             bot_name=excluded.bot_name,
+                             updated_at=excluded.updated_at""",
+            (group_id, store_name, bot_name, now, now)
+        )
+
+
+def get_store_for_group(group_id: str) -> Optional[str]:
+    """
+    從 line_groups 資料表查詢群組對應的門店名稱。
+    優先順序：DB 記錄 > LINE_GROUP_STORE_MAP 環境變數（由呼叫方處理）
+    """
+    if not group_id:
+        return None
+    with _conn() as db:
+        row = db.execute(
+            "SELECT store_name FROM line_groups WHERE group_id=?",
+            (group_id,)
+        ).fetchone()
+    return row["store_name"] if row else None
+
+
+def load_line_groups() -> list[dict]:
+    """回傳所有 Line 群組對應設定"""
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT * FROM line_groups ORDER BY updated_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_line_group(group_id: str) -> None:
+    """刪除指定群組對應"""
+    with _conn() as db:
+        db.execute("DELETE FROM line_groups WHERE group_id=?", (group_id,))

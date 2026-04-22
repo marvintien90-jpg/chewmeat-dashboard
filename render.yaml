@@ -1,0 +1,45 @@
+# render.yaml — Render.com 部署設定
+# Line Webhook 接收器（FastAPI）
+#
+# 使用方式：
+#   1. 登入 render.com → New → Blueprint
+#   2. 連接此 GitHub Repo
+#   3. Render 自動讀取此檔案並建立服務
+#   4. 在 Render Dashboard > Environment 填入 sync:false 的機密值
+#
+# 持久磁碟（$0.25/GB/月）讓 SQLite 在重啟後保留資料
+# 如需免費方案，改用 Supabase PostgreSQL 並修改 edge_store.py
+
+services:
+  - type: web
+    name: kerou-line-webhook
+    runtime: python
+    plan: free
+    region: singapore        # 選擇最近的區域
+
+    buildCommand: pip install -r requirements-webhook.txt
+    startCommand: uvicorn line_webhook:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: EDGE_DB_PATH
+        value: /data/edge_agent.db   # 對應 disk.mountPath
+
+      - key: LINE_REPLY_ON_EVENT
+        value: "true"                 # 收到訊息後自動回覆確認
+
+      # ⚠️ 以下三個金鑰請在 Render Dashboard > Environment 手動填入，勿提交至 Git
+      - key: LINE_CHANNEL_SECRET
+        sync: false                   # 在 Render Dashboard 填入
+
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false                   # 在 Render Dashboard 填入
+
+      - key: LINE_GROUP_STORE_MAP
+        sync: false                   # JSON: {"C群組ID": "門店名"}，在 Dashboard 填入
+
+    disk:
+      name: kerou-edge-db
+      mountPath: /data
+      sizeGB: 1

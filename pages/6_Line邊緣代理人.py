@@ -1,7 +1,7 @@
 """
-6_Line邊緣代理人.py — v3.0
+6_Line邊緣代理人.py — v3.1
 嗑肉數位總部：分身參謀全景看板
-v3 新增：智能結案監聽器 / 多模態預留 / AI 戰略點評 / 數據清理 / 壓力測試
+v3.1 新增：Line Messaging API 真實整合 / 群組→門店對應管理 / Webhook 輪詢
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -30,12 +30,19 @@ if "Line智能邊緣代理人" not in st.session_state.get("enabled_pages", set(
     st.page_link("app.py", label="← 返回總部")
     st.stop()
 
-# ── Edge Store 初始化 ─────────────────────────────────────────────
-from utils import edge_store
+# ── Edge Store + NLP + Line 工具初始化 ───────────────────────────
+from utils import edge_store, edge_nlp
 edge_store.init_db()
 
 from utils.ui_helpers import inject_global_css
 inject_global_css()
+
+# line_utils 是可選依賴（Render Webhook 伺服器才必須安裝 requests）
+try:
+    from utils import line_utils as _line_utils
+    _HAS_LINE_UTILS = True
+except ImportError:
+    _HAS_LINE_UTILS = False
 
 # ================================================================
 # CSS
@@ -111,74 +118,19 @@ footer    { visibility: hidden; }
 
 
 # ================================================================
-# 常數
+# 常數（NLP 部分統一從 utils/edge_nlp 取得）
 # ================================================================
-STORE_LIST = [
-    "崇德店", "美村店", "公益店", "北屯店", "南屯店",
-    "西屯店", "東區店", "北區店", "南區店", "中區店",
-    "豐原店", "太平店", "大里店", "霧峰店", "沙鹿店",
-]
+# 門店清單（UI 顯示 + 模擬器使用）
+STORE_LIST   = edge_nlp.STORE_LIST
 MANAGER_LIST = ["張主管", "李主管", "王主管", "陳主管", "林主管"]
 
+# 別名，讓頁面其餘程式碼無需修改
+_CAT_CN      = edge_nlp.CAT_CN
+_LEVEL_LABELS = edge_nlp.LEVEL_LABELS
 
-# ================================================================
-# 增強 NLP v2 — 關鍵字分類 + 語意終點判定
-# ================================================================
-_RED_CATS: dict[str, list[str]] = {
-    "red-equipment":   ["故障", "壞了", "不動了", "無法運作", "無法結帳", "死機", "當機"],
-    "red-temperature": ["溫度異常", "冷藏", "冷凍異常", "溫控"],
-    "red-power":       ["斷電", "停電", "電源故障", "跳電"],
-    "red-safety":      ["漏水", "火警", "受傷", "危險"],
-    "red-other":       ["異常", "停擺", "報廢", "緊急", "無法"],
-}
-_YELLOW_CATS: dict[str, list[str]] = {
-    "yellow-staffing": ["支援", "人手不足", "工讀生", "人力", "幫忙"],
-    "yellow-material": ["物料", "需要", "協助", "準備", "額外"],
-    "yellow-delivery": ["配送", "外送", "調度", "訂單量"],
-}
-_BLUE_CATS: dict[str, list[str]] = {
-    "blue-inventory": ["盤點", "庫存不足", "補貨", "包材"],
-    "blue-task":      ["結帳", "清潔", "任務", "完成", "派發"],
-    "blue-report":    ["回報", "等待", "總部"],
-}
-
-_CONFIRM_PATTERNS = [
-    r"收到", r"搞定", r"ok了?", r"好了", r"處理完了?", r"完成了?",
-    r"確認", r"好的", r"沒問題", r"已處理", r"結案了?", r"送達",
-    r"到了", r"搞好了", r"修好了", r"補完了", r"解決了",
-    r"弄好了", r"處理好了", r"done", r"finished", r"ok$",
-]
-
-_LEVEL_LABELS = {"red": "🔴 紅色警戒", "yellow": "🟡 黃色行動", "blue": "🔵 藍色任務"}
-_CAT_CN: dict[str, str] = {
-    "red-equipment":   "設備故障",  "red-temperature": "溫度異常",
-    "red-power":       "電力異常",  "red-safety":      "安全事故",
-    "red-other":       "紅區-其他", "yellow-staffing": "人力支援",
-    "yellow-material": "物料協助",  "yellow-delivery": "配送調度",
-    "blue-inventory":  "庫存盤點",  "blue-task":       "例行任務",
-    "blue-report":     "回報確認",
-}
-
-
-def classify_v2(text: str) -> tuple[str, str]:
-    """增強分類器 v2，回傳 (level, keyword_cat)"""
-    t = text or ""
-    for cat, kws in _RED_CATS.items():
-        if any(kw in t for kw in kws):
-            return "red", cat
-    for cat, kws in _YELLOW_CATS.items():
-        if any(kw in t for kw in kws):
-            return "yellow", cat
-    for cat, kws in _BLUE_CATS.items():
-        if any(kw in t for kw in kws):
-            return "blue", cat
-    return "blue", "blue-task"
-
-
-def is_confirmation(text: str) -> bool:
-    """判斷是否為「模糊結案確認」語意"""
-    t = (text or "").lower()
-    return any(re.search(p, t) for p in _CONFIRM_PATTERNS)
+# 直接重用 edge_nlp 函數
+classify_v2     = edge_nlp.classify_v2
+is_confirmation = edge_nlp.is_confirmation
 
 
 # ================================================================
@@ -305,6 +257,94 @@ def process_webhook(content: str, user: str = "模擬用戶",
     return {"type": "new", "id": new_id,
             "level": level, "keyword_cat": keyword_cat,
             "content": content, "store": store}
+
+
+# ================================================================
+# v3.1：真實 Webhook 輪詢處理器
+# ================================================================
+def _resolve_store_from_webhook(group_id: str, text: str) -> str:
+    """
+    解析門店：DB 對應表 > env 對應表 > 從文字萃取 > 預設
+    """
+    # P1: DB line_groups 表
+    if group_id:
+        db_store = edge_store.get_store_for_group(group_id)
+        if db_store:
+            return db_store
+    # P2: env/secrets LINE_GROUP_STORE_MAP
+    if group_id and _HAS_LINE_UTILS:
+        env_map = _line_utils.get_group_store_map()
+        if group_id in env_map:
+            return env_map[group_id]
+    # P3: 從文字萃取
+    extracted = edge_nlp.extract_store_from_text(text)
+    if extracted:
+        return extracted
+    return "Line群組"
+
+
+def process_pending_webhooks() -> int:
+    """
+    輪詢 webhook_cache 中由真實 Line Webhook 寫入但尚未處理的訊息，
+    轉為正式 events。
+    回傳處理筆數。
+    僅在 webhook server 和 Streamlit 共用同一個 SQLite 路徑時有效。
+    """
+    unprocessed = edge_store.get_unprocessed_webhooks()
+    if not unprocessed:
+        return 0
+
+    count = 0
+    for wh in unprocessed:
+        text     = (wh.get("raw_text") or "").strip()
+        group_id = wh.get("group_id", "")
+        uid      = wh.get("line_user_id", "")
+
+        if not text:
+            edge_store.mark_webhook_processed(wh["id"])
+            continue
+
+        store      = _resolve_store_from_webhook(group_id, text)
+        user_alias = f"Line_{uid[-6:]}" if uid else "Line用戶"
+
+        if is_confirmation(text):
+            edge_store.auto_close_confirmation_for_store(store)
+        else:
+            level, keyword_cat = classify_v2(text)
+            merge_id = edge_store.find_merge_candidate(store, user_alias, level)
+            if merge_id:
+                edge_store.merge_event_content(merge_id, text)
+            else:
+                edge_store.save_event({
+                    "level":       level,
+                    "store":       store,
+                    "user_alias":  user_alias,
+                    "content":     text,
+                    "status":      "pending",
+                    "keyword_cat": keyword_cat,
+                })
+
+        edge_store.mark_webhook_processed(wh["id"])
+        count += 1
+
+    return count
+
+
+def run_webhook_poll() -> None:
+    """
+    每 30 秒輪詢一次 webhook_cache（Streamlit 側）。
+    適用於 webhook server 與 Streamlit 共用同一個 EDGE_DB_PATH 的部署場景。
+    """
+    key  = "edge_last_webhook_poll"
+    last = st.session_state.get(key)
+    now  = datetime.now()
+    if last is not None and (now - last).total_seconds() < 30:
+        return
+
+    n = process_pending_webhooks()
+    st.session_state[key] = now
+    if n > 0:
+        st.toast(f"📨 從 Line 群組收到 {n} 筆新訊息", icon="📲")
 
 
 # ================================================================
@@ -859,6 +899,68 @@ def render_sidebar():
             st.session_state.edge_show_learning = True
 
         st.divider()
+
+        # ── Line API 連線狀態（v3.1 新增）────────────────────────
+        st.markdown("**📡 Line API 狀態**")
+        if _HAS_LINE_UTILS:
+            token  = _line_utils.get_channel_access_token()
+            secret = _line_utils.get_channel_secret()
+            if token and secret:
+                # 60 秒緩存，避免頻繁呼叫 API
+                cache_key = "edge_line_status_cache"
+                cache_ts  = "edge_line_status_ts"
+                cached = st.session_state.get(cache_key)
+                last_ts = st.session_state.get(cache_ts)
+                now_ts  = datetime.now()
+                if cached is None or (last_ts and (now_ts - last_ts).total_seconds() > 60):
+                    with st.spinner("驗證中..."):
+                        cached = _line_utils.check_connection()
+                    st.session_state[cache_key] = cached
+                    st.session_state[cache_ts]  = now_ts
+
+                if cached.get("ok"):
+                    st.success(f"🟢 已連線\n**Bot：** {cached.get('bot_name','—')}")
+                    st.caption(f"Bot ID: `{cached.get('bot_id','')[:16]}...`")
+                else:
+                    st.error(f"🔴 連線失敗\n{cached.get('reason','未知')}")
+                if st.button("🔄 重新驗證", key="edge_line_recheck", use_container_width=True):
+                    st.session_state.pop("edge_line_status_cache", None)
+                    st.rerun()
+            else:
+                missing = []
+                if not token:  missing.append("ACCESS_TOKEN")
+                if not secret: missing.append("CHANNEL_SECRET")
+                st.warning(f"⚪ 未設定：{', '.join(missing)}\n請在 Streamlit Secrets 填入")
+        else:
+            st.caption("⚪ requests 未安裝（僅限模擬模式）")
+
+        # ── 群組→門店對應管理 ────────────────────────────────────
+        with st.expander("🔗 群組→門店對應設定", expanded=False):
+            groups = edge_store.load_line_groups()
+            if groups:
+                for g in groups:
+                    c1, c2, c3 = st.columns([3, 3, 1])
+                    c1.caption(f"`{g['group_id'][:16]}...`")
+                    c2.caption(g["store_name"])
+                    if c3.button("✕", key=f"del_grp_{g['group_id']}", help="刪除此對應"):
+                        edge_store.delete_line_group(g["group_id"])
+                        st.rerun()
+            else:
+                st.caption("尚無對應設定")
+
+            st.markdown("**➕ 新增對應**")
+            new_gid   = st.text_input("Line 群組 ID (C 開頭)", key="edge_new_gid",
+                                       placeholder="C1234567890abcdef...")
+            new_store = st.selectbox("對應門店", STORE_LIST, key="edge_new_store")
+            if st.button("新增", use_container_width=True, key="edge_add_group"):
+                if new_gid.strip():
+                    edge_store.upsert_line_group(new_gid.strip(), new_store)
+                    st.success(f"✅ {new_gid[:16]}... → {new_store}")
+                    st.rerun()
+                else:
+                    st.warning("請輸入群組 ID")
+
+        st.divider()
         st.page_link("app.py", label="← 返回總部大門")
 
 
@@ -1000,6 +1102,9 @@ def show_learning_dialog():
 # ================================================================
 def main():
     _edge_init()
+
+    # v3.1：真實 Webhook 輪詢（每 30 秒，共用 DB 時有效）
+    run_webhook_poll()
 
     # v3：自動化背景程序
     run_auto_closure_check()   # 每 5 分鐘：智能結案監聽器

@@ -1,0 +1,8 @@
+# Line Webhook FastAPI 伺服器依賴
+# 部署至 Render.com 時使用此檔案
+# Build Command: pip install -r requirements-webhook.txt
+# Start Command: uvicorn line_webhook:app --host 0.0.0.0 --port $PORT
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+requests>=2.31.0
