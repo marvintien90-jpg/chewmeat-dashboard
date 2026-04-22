@@ -199,6 +199,8 @@ with st.sidebar:
     st.page_link("app.py", label="🏢 返回總部大門")
     st.page_link("pages/1_數據戰情中心.py", label="📊 數據戰情中心")
     st.page_link("pages/3_決策AI偵察.py",   label="🧠 決策AI偵察")
+    st.page_link("pages/4_品牌數位資產.py", label="🎨 品牌數位資產")
+    st.page_link("pages/6_Line邊緣代理人.py", label="🔔 Line 邊緣代理人")
     st.divider()
 
     view_mode = st.radio("顯示模式", ["📋 卡片視圖", "📊 統計分析", "✍️ 審核批示"], horizontal=False)

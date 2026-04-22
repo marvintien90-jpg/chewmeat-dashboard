@@ -155,6 +155,7 @@ with st.sidebar:
     st.page_link("pages/1_數據戰情中心.py",      label="📊 數據戰情中心")
     st.page_link("pages/2_專案追蹤師.py",        label="🗂️ 專案追蹤師")
     st.page_link("pages/3_決策AI偵察.py",        label="🧠 決策AI偵察")
+    st.page_link("pages/6_Line邊緣代理人.py",    label="🔔 Line 邊緣代理人")
     st.divider()
 
     # Brand config expander

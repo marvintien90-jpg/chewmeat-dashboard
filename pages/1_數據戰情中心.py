@@ -1616,6 +1616,10 @@ def main():
     st.sidebar.markdown("## 📊 嗑肉石鍋 營收看板")
     st.sidebar.caption(f"資料更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     st.sidebar.page_link("app.py", label="← 返回數位總部大門")
+    st.sidebar.page_link("pages/2_專案追蹤師.py",      label="🗂️ 專案追蹤師")
+    st.sidebar.page_link("pages/3_決策AI偵察.py",      label="🧠 決策AI偵察")
+    st.sidebar.page_link("pages/4_品牌數位資產.py",    label="🎨 品牌數位資產")
+    st.sidebar.page_link("pages/6_Line邊緣代理人.py",  label="🔔 Line 邊緣代理人")
     st.sidebar.divider()
 
     # ── 跑馬燈 & AI 摘要（頂部） ──

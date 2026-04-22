@@ -54,6 +54,7 @@ with st.sidebar:
     st.page_link("pages/2_專案追蹤師.py", label="🗂️ 專案追蹤師")
     st.page_link("pages/3_決策AI偵察.py", label="🧠 決策AI偵察")
     st.page_link("pages/4_品牌數位資產.py", label="🎨 品牌數位資產")
+    st.page_link("pages/6_Line邊緣代理人.py", label="🔔 Line 邊緣代理人")
 
 st.markdown("# ⚙️ 系統設定")
 st.markdown("**管理員專屬** — 設定各部門 Google Sheet 連線與系統參數")

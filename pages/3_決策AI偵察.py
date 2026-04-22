@@ -89,6 +89,7 @@ with st.sidebar:
     st.page_link("pages/1_數據戰情中心.py",            label="📊 數據戰情中心")
     st.page_link("pages/2_專案追蹤師.py",              label="🗂️ 專案追蹤師")
     st.page_link("pages/4_品牌數位資產.py",            label="🎨 品牌數位資產")
+    st.page_link("pages/6_Line邊緣代理人.py",          label="🔔 Line 邊緣代理人")
     st.divider()
     lookback = st.selectbox("比對區間", [1, 2, 3], index=1, format_func=lambda x: f"近 {x} 個月")
     if st.button("🔄 重新診斷", use_container_width=True):
