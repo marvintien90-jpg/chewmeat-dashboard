@@ -202,8 +202,10 @@ def show_login():
                         allowed.add("系統設定")
                         st.session_state["enabled_pages"] = allowed
                     st.session_state["user_role"] = user_cfg.get("role", "viewer")
-                    # 清除 multiselect widget 快取，確保登入後以最新 allowed_pages 為 default
-                    st.session_state.pop("sidebar_pages_multiselect", None)
+                    # 直接賦值 multiselect widget state，強制覆蓋 browser 端快取
+                    st.session_state["sidebar_pages_multiselect"] = [
+                        DISPLAY_NAMES[p] for p in allowed if p in DISPLAY_NAMES
+                    ]
                     st.rerun()
                 else:
                     st.error("❌ 密鑰錯誤，請重新輸入")

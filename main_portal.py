@@ -19,7 +19,7 @@ _DEFAULT_ACCESS = {
     ACCESS_KEY: {
         "role": "admin",
         "display_name": "總指揮",
-        "allowed_pages": ["數據戰情中心", "專案追蹤師", "決策AI偵察", "品牌數位資產", "系統設定"],
+        "allowed_pages": ["數據戰情中心", "專案追蹤師", "決策AI偵察", "品牌數位資產", "Line智能邊緣代理人", "系統設定"],
     }
 }
 
@@ -47,11 +47,12 @@ def _save_access_control(data: dict) -> bool:
 
 # ── 功能模組命名映射（顯示名稱 ↔ 內部鍵）──────────────────────────
 DISPLAY_NAMES: dict[str, str] = {
-    "數據戰情中心": "[核心] 數位戰情室",
-    "專案追蹤師":   "[核心] 跨部追蹤督導",
-    "決策AI偵察":   "[決策] 智能 AI 偵察",
-    "品牌數位資產": "[品牌] 數位資產管理",
-    "系統設定":     "[管理] 系統設定",
+    "數據戰情中心":       "[核心] 數位戰情室",
+    "專案追蹤師":         "[核心] 跨部追蹤督導",
+    "決策AI偵察":         "[決策] 智能 AI 偵察",
+    "品牌數位資產":       "[品牌] 數位資產管理",
+    "Line智能邊緣代理人": "[指揮] Line 邊緣代理人",
+    "系統設定":           "[管理] 系統設定",
 }
 REVERSE_NAMES: dict[str, str] = {v: k for k, v in DISPLAY_NAMES.items()}
 
@@ -211,19 +212,21 @@ def show_login():
 # 分頁權限設定（管理員勾選）
 # ============================================================
 ALL_PAGES = {
-    "數據戰情中心": ("pages/1_數據戰情中心.py", "chart-bar",      "營收儀表板・門店排行・達標追蹤<br>商圈分析・AI 數據洞察"),
-    "專案追蹤師":   ("pages/2_專案追蹤師.py",   "clipboard-list", "6 部門跨部門工作進度・審核批示<br>AI 督導摘要・紅黃燈預警"),
-    "決策AI偵察":   ("pages/3_決策AI偵察.py",   "light-bulb",     "跨部門連動診斷・偏差警示<br>逾期任務追蹤・白話報告"),
-    "品牌數位資產": ("pages/4_品牌數位資產.py", "sparkles",       "活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照"),
-    "系統設定":     ("pages/5_系統設定.py",     "cog",            "部門 Sheet 連線・密碼管理<br>系統參數設定"),
+    "數據戰情中心":       ("pages/1_數據戰情中心.py",   "chart-bar",      "營收儀表板・門店排行・達標追蹤<br>商圈分析・AI 數據洞察"),
+    "專案追蹤師":         ("pages/2_專案追蹤師.py",     "clipboard-list", "6 部門跨部門工作進度・審核批示<br>AI 督導摘要・紅黃燈預警"),
+    "決策AI偵察":         ("pages/3_決策AI偵察.py",     "light-bulb",     "跨部門連動診斷・偏差警示<br>逾期任務追蹤・白話報告"),
+    "品牌數位資產":       ("pages/4_品牌數位資產.py",   "sparkles",       "活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照"),
+    "Line智能邊緣代理人": ("pages/6_Line邊緣代理人.py", "bell",           "Line群組掃描・三色分級預警<br>分身決策沙盒・全景戰報推播"),
+    "系統設定":           ("pages/5_系統設定.py",       "cog",            "部門 Sheet 連線・密碼管理<br>系統參數設定"),
 }
 
 CARD_CLASSES = {
-    "數據戰情中心": "",
-    "專案追蹤師":   "module-card-ops",
-    "決策AI偵察":   "module-card-brain",
-    "品牌數位資產": "module-card-mkt",
-    "系統設定":     "module-card-admin",
+    "數據戰情中心":       "",
+    "專案追蹤師":         "module-card-ops",
+    "決策AI偵察":         "module-card-brain",
+    "品牌數位資產":       "module-card-mkt",
+    "Line智能邊緣代理人": "module-card-ops",
+    "系統設定":           "module-card-admin",
 }
 
 
