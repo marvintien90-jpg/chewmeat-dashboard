@@ -1,7 +1,7 @@
 """
-6_Line邊緣代理人.py — v5.0
+6_Line邊緣代理人.py — v6.0
 嗑肉數位總部：Line 邊緣代理人全景看板
-v5.0：三 Tab 架構 / LINE API 設定移至 App UI / 跑馬燈 / AI 智能概況 / 儀表板圖表
+v6.0：Sidebar 導覽 / 門店管理 / Claude AI API 設定 / 戰報中心 / 跑馬燈減速
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -10,10 +10,11 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import random, re
+import json as _json
 
 # ── 頁面設定 ─────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="嗑肉數位總部 ｜ Line 邊緣代理人 v5",
+    page_title="嗑肉數位總部 ｜ Line 邊緣代理人 v6",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -64,6 +65,19 @@ for _k in _LINE_CFG_KEYS:
         _v = edge_store.get_setting(f"app_cfg_{_k}")
         if _v:
             os.environ[_k] = _v
+
+# ── Claude AI API Key 注入 ───────────────────────────────────────
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    _v = edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY")
+    if _v:
+        os.environ["ANTHROPIC_API_KEY"] = _v
+    else:
+        try:
+            _v = st.secrets.get("ANTHROPIC_API_KEY", "")
+            if _v:
+                os.environ["ANTHROPIC_API_KEY"] = _v
+        except Exception:
+            pass
 
 # ================================================================
 # CSS
@@ -143,7 +157,7 @@ st.markdown("""
 }
 .marquee-inner {
     white-space: nowrap;
-    animation: marquee_scroll 30s linear infinite;
+    animation: marquee_scroll 60s linear infinite;
     display: inline-block;
     font-size: 0.9rem;
     color: #e0f0ff;
@@ -156,9 +170,8 @@ footer    { visibility: hidden; }
 
 
 # ================================================================
-# 常數
+# 常數 & Helper
 # ================================================================
-STORE_LIST   = edge_nlp.STORE_LIST
 MANAGER_LIST = ["張主管", "李主管", "王主管", "陳主管", "林主管"]
 
 _CAT_CN       = edge_nlp.CAT_CN
@@ -166,6 +179,20 @@ _LEVEL_LABELS = edge_nlp.LEVEL_LABELS
 
 classify_v2     = edge_nlp.classify_v2
 is_confirmation = edge_nlp.is_confirmation
+
+
+def get_store_list() -> list[str]:
+    """取得門店清單（優先讀取使用者自訂，否則使用預設）"""
+    stored = edge_store.get_setting("app_custom_store_list")
+    if stored:
+        try:
+            lst = _json.loads(stored)
+            if lst:
+                return lst
+        except Exception:
+            pass
+    return list(edge_nlp.STORE_LIST)
+
 
 _WEBHOOK_TEMPLATES = [
     {"content": "{store} POS 機故障，無法結帳！",            "user": "店員小美"},
@@ -194,6 +221,15 @@ def _edge_init():
         "edge_last_maintenance": None,
         "edge_show_report":      False,
         "edge_show_learning":    False,
+        "edge_view":             "dashboard",
+        # 看板篩選
+        "edge_kanban_show_closed": False,
+        "edge_kanban_level_filter": [],
+        # 戰報篩選
+        "edge_report_range":     "近7日",
+        "edge_report_stores":    [],
+        "edge_report_levels":    [],
+        "edge_show_report_view": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -207,6 +243,7 @@ def _edge_init():
 
 
 def _generate_mock_events() -> list[dict]:
+    store_list = get_store_list()
     samples = [
         ("red",    "red-equipment",   "崇德店 POS 機故障，無法結帳！",          "店員小美", 5),
         ("red",    "red-temperature", "美村店冷藏櫃溫度異常，商品可能要報廢",    "店員阿強", 3),
@@ -226,7 +263,7 @@ def _generate_mock_events() -> list[dict]:
             "id": i + 1,
             "level": lv,
             "keyword_cat": cat,
-            "store": random.choice(STORE_LIST),
+            "store": random.choice(store_list),
             "user_alias": user,
             "content": content,
             "created_at": datetime.now() - timedelta(hours=hr, minutes=random.randint(0, 59)),
@@ -244,7 +281,7 @@ def _generate_mock_events() -> list[dict]:
 def process_webhook(content: str, user: str = "模擬用戶",
                     store: str = "") -> dict:
     if not store:
-        store = random.choice(STORE_LIST)
+        store = random.choice(get_store_list())
 
     wh_id = edge_store.cache_webhook(content, "sim_user", "sim_group")
 
@@ -581,7 +618,35 @@ def generate_battle_report() -> str:
             or ["  （今日尚無決策紀錄）"]
         ),
         "\n" + "=" * 32,
-        "📊 由分身參謀自動彙整 · SQLite v5 · AI Edge Agent",
+        "📊 由分身參謀自動彙整 · SQLite v6 · AI Edge Agent",
+    ]
+    return "\n".join(lines)
+
+
+def generate_battle_report_filtered(evts: list[dict], filters: dict) -> str:
+    """根據篩選條件產生戰報文字"""
+    now = datetime.now()
+    red_p  = [e for e in evts if e["level"] == "red"    and e["status"] == "pending"]
+    yel_p  = [e for e in evts if e["level"] == "yellow" and e["status"] == "pending"]
+    blu_p  = [e for e in evts if e["level"] == "blue"   and e["status"] == "pending"]
+
+    range_label = filters.get("range", "近7日")
+    store_label = "、".join(filters.get("stores", [])) or "全部門店"
+    level_label = "、".join(filters.get("levels", [])) or "全部等級"
+
+    lines = [
+        "🛡️ 【嗑肉數位總部 · 篩選戰報】",
+        f"📅 {now.strftime('%Y-%m-%d %H:%M')}",
+        f"📊 範圍：{range_label} ｜ 門店：{store_label} ｜ 等級：{level_label}",
+        "=" * 32,
+        f"\n🔴 【紅色警戒】{len(red_p)} 件（待處理）",
+        *[f"  • {e['store']}：{e['content'][:40]}" for e in red_p[:5]],
+        f"\n🟡 【黃色行動】{len(yel_p)} 件（待處理）",
+        *[f"  • {e['store']}：{e['content'][:40]}" for e in yel_p[:5]],
+        f"\n🔵 【藍色任務】{len(blu_p)} 件（待處理）",
+        *[f"  • {e['store']}：{e['content'][:40]}" for e in blu_p[:3]],
+        "\n" + "=" * 32,
+        "📊 由分身參謀自動彙整 · SQLite v6 · AI Edge Agent",
     ]
     return "\n".join(lines)
 
@@ -761,7 +826,7 @@ def show_decision_sandbox(item: dict):
 # ================================================================
 # 戰報彈窗
 # ================================================================
-@st.dialog("📡 全景戰報預覽 v5")
+@st.dialog("📡 全景戰報預覽 v6")
 def show_battle_report_dialog():
     evts = edge_store.load_events()
 
@@ -833,44 +898,100 @@ def show_learning_dialog():
 
 
 # ================================================================
-# 側欄（精簡版）
+# 側欄（含導覽 + 統計 + 篩選 + 底部）
 # ================================================================
-def render_sidebar():
+def render_sidebar(evts: list[dict]):
     with st.sidebar:
         st.markdown("## 🛡️ 控制台")
         st.divider()
 
+        # ── 導覽按鈕 ──────────────────────────────────────────────
+        current_view = st.session_state.get("edge_view", "dashboard")
+
+        nav_items = [
+            ("dashboard", "📊 智能儀表板"),
+            ("kanban",    "🎯 事件看板"),
+            ("report",    "📋 戰報中心"),
+            ("settings",  "⚙️ 系統設定"),
+        ]
+        for view_key, view_label in nav_items:
+            btn_type = "primary" if current_view == view_key else "secondary"
+            if st.button(view_label, key=f"nav_{view_key}",
+                         type=btn_type, use_container_width=True):
+                st.session_state["edge_view"] = view_key
+                st.rerun()
+
+        st.divider()
+
         # ── 即時統計（4 metric）──────────────────────────────────────
-        evts = edge_store.load_events()
         today_str = datetime.now().strftime("%Y-%m-%d")
         ai_cnt = sum(
             1 for e in evts
-            if e.get("auto_closed_at") and str(e.get("auto_closed_at","")).startswith(today_str)
+            if e.get("auto_closed_at") and str(e.get("auto_closed_at", "")).startswith(today_str)
         )
+        r_cnt = len([e for e in evts if e["level"] == "red"    and e["status"] == "pending"])
+        y_cnt = len([e for e in evts if e["level"] == "yellow" and e["status"] == "pending"])
+        b_cnt = len([e for e in evts if e["level"] == "blue"   and e["status"] == "pending"])
 
         st.markdown("**📊 即時統計**")
         m1, m2 = st.columns(2)
-        m1.metric("🔴 紅色", len([e for e in evts if e["level"] == "red" and e["status"] == "pending"]))
-        m2.metric("🟡 黃色", len([e for e in evts if e["level"] == "yellow" and e["status"] == "pending"]))
+        m1.metric("🔴 紅色", r_cnt)
+        m2.metric("🟡 黃色", y_cnt)
         m3, m4 = st.columns(2)
-        m3.metric("🔵 藍色", len([e for e in evts if e["level"] == "blue" and e["status"] == "pending"]))
+        m3.metric("🔵 藍色", b_cnt)
         m4.metric("🤖 AI結案", ai_cnt)
 
+        # ── 看板模式專屬篩選 ──────────────────────────────────────
+        if current_view == "kanban":
+            st.divider()
+            st.markdown("**🎯 看板篩選**")
+            st.session_state["edge_kanban_show_closed"] = st.checkbox(
+                "顯示已結案",
+                value=st.session_state.get("edge_kanban_show_closed", False),
+                key="kanban_show_closed_cb",
+            )
+            st.session_state["edge_kanban_level_filter"] = st.multiselect(
+                "等級篩選（空=全部）",
+                ["紅色", "黃色", "藍色"],
+                default=st.session_state.get("edge_kanban_level_filter", []),
+                key="kanban_level_ms",
+            )
+
+        # ── 戰報模式專屬篩選 ──────────────────────────────────────
+        if current_view == "report":
+            st.divider()
+            st.markdown("**📋 報表篩選**")
+            st.session_state["edge_report_range"] = st.selectbox(
+                "時間範圍",
+                ["今日", "近3日", "近7日", "近30日"],
+                index=["今日", "近3日", "近7日", "近30日"].index(
+                    st.session_state.get("edge_report_range", "近7日")
+                ),
+                key="report_range_sel",
+            )
+            st.session_state["edge_report_stores"] = st.multiselect(
+                "門店篩選（空=全部）",
+                get_store_list(),
+                default=st.session_state.get("edge_report_stores", []),
+                key="report_stores_ms",
+            )
+            st.session_state["edge_report_levels"] = st.multiselect(
+                "等級篩選（空=全部）",
+                ["紅色", "黃色", "藍色"],
+                default=st.session_state.get("edge_report_levels", []),
+                key="report_levels_ms",
+            )
+            if st.button("📋 生成戰報", key="sidebar_gen_report",
+                         type="primary", use_container_width=True):
+                st.session_state["edge_show_report_view"] = True
+                st.rerun()
+
         st.divider()
 
-        # ── 顯示過濾 ──────────────────────────────────────────────
-        st.markdown("**🎯 顯示過濾**")
-        st.session_state.edge_show_closed = st.checkbox(
-            "顯示已結案事件",
-            value=st.session_state.edge_show_closed,
-            key="edge_closed_cb",
-        )
-
-        st.divider()
+        # ── 底部：返回 + Line API 狀態 ────────────────────────────
         st.page_link("app.py", label="← 返回總部大門")
         st.divider()
 
-        # ── Line API 連線狀態（置底，緊湊顯示）─────────────────────
         st.markdown("**📡 Line API**")
         if _HAS_LINE_UTILS:
             token  = _line_utils.get_channel_access_token()
@@ -900,9 +1021,9 @@ def render_sidebar():
 
 
 # ================================================================
-# Tab 1：智能儀表板
+# 檢視一：智能儀表板
 # ================================================================
-def render_tab_dashboard(evts: list[dict]):
+def render_view_dashboard(evts: list[dict]):
     # ── 跑馬燈 ────────────────────────────────────────────────────
     pending_evts = [e for e in evts if e["status"] == "pending"]
     latest8 = sorted(pending_evts, key=lambda x: x["created_at"], reverse=True)[:8]
@@ -945,7 +1066,7 @@ def render_tab_dashboard(evts: list[dict]):
     b_cnt = len([e for e in evts if e["level"] == "blue"   and e["status"] == "pending"])
     ai_cnt = sum(
         1 for e in evts
-        if e.get("auto_closed_at") and str(e.get("auto_closed_at","")).startswith(today_str)
+        if e.get("auto_closed_at") and str(e.get("auto_closed_at", "")).startswith(today_str)
     )
 
     m1, m2, m3, m4 = st.columns(4)
@@ -1017,9 +1138,16 @@ def render_tab_dashboard(evts: list[dict]):
 
 
 # ================================================================
-# Tab 2：事件看板
+# 檢視二：事件看板
 # ================================================================
-def render_tab_kanban(evts: list[dict]):
+def render_view_kanban(evts: list[dict]):
+    show_closed   = st.session_state.get("edge_kanban_show_closed", False)
+    level_filter  = st.session_state.get("edge_kanban_level_filter", [])
+
+    # 等級中文→英文對應
+    _lv_map = {"紅色": "red", "黃色": "yellow", "藍色": "blue"}
+    active_levels = [_lv_map[lv] for lv in level_filter] if level_filter else ["red", "yellow", "blue"]
+
     # ── 重複報修警告橫幅 ──────────────────────────────────────
     repeat_stores = edge_store.get_repeat_repairs_24h()
     if repeat_stores:
@@ -1028,12 +1156,14 @@ def render_tab_kanban(evts: list[dict]):
             f"⚡ **24H 重複報修警示**：{names} 在過去 24 小時內出現多次紅色事件，請重點跟進！"
         )
 
-    show_closed = st.session_state.edge_show_closed
     col_r, col_y, col_b = st.columns(3)
 
     def _render_col(col, level: str, header_html: str):
         with col:
             st.markdown(header_html, unsafe_allow_html=True)
+            if level not in active_levels:
+                st.info("（已隱藏此等級）")
+                return
             items = [e for e in evts if e["level"] == level]
             if not show_closed:
                 items = [e for e in items if e["status"] != "closed"]
@@ -1053,9 +1183,118 @@ def render_tab_kanban(evts: list[dict]):
 
 
 # ================================================================
-# Tab 3：系統設定
+# 檢視三：戰報中心
 # ================================================================
-def render_tab_settings():
+def render_view_report(evts: list[dict]):
+    st.markdown("### 📋 戰報中心")
+
+    # 讀取 sidebar 篩選條件
+    range_label  = st.session_state.get("edge_report_range", "近7日")
+    sel_stores   = st.session_state.get("edge_report_stores", [])
+    sel_levels   = st.session_state.get("edge_report_levels", [])
+
+    # 時間範圍篩選
+    now   = datetime.now()
+    today = now.date()
+    _range_map = {
+        "今日":   lambda e: e["created_at"].date() == today,
+        "近3日":  lambda e: e["created_at"] >= now - timedelta(days=3),
+        "近7日":  lambda e: e["created_at"] >= now - timedelta(days=7),
+        "近30日": lambda e: e["created_at"] >= now - timedelta(days=30),
+    }
+    filtered = [e for e in evts if _range_map.get(range_label, lambda x: True)(e)]
+
+    # 門店篩選
+    if sel_stores:
+        filtered = [e for e in filtered if e["store"] in sel_stores]
+
+    # 等級篩選
+    _lv_map = {"紅色": "red", "黃色": "yellow", "藍色": "blue"}
+    if sel_levels:
+        active_lv = [_lv_map[lv] for lv in sel_levels]
+        filtered = [e for e in filtered if e["level"] in active_lv]
+
+    # ── 篩選後統計 ─────────────────────────────────────────────
+    r_p = [e for e in filtered if e["level"] == "red"    and e["status"] == "pending"]
+    y_p = [e for e in filtered if e["level"] == "yellow" and e["status"] == "pending"]
+    b_p = [e for e in filtered if e["level"] == "blue"   and e["status"] == "pending"]
+
+    st.markdown(
+        f"**篩選條件：** 時間 `{range_label}` ｜ "
+        f"門店 `{'全部' if not sel_stores else '、'.join(sel_stores)}` ｜ "
+        f"等級 `{'全部' if not sel_levels else '、'.join(sel_levels)}`"
+    )
+    st.markdown(f"共篩選出 **{len(filtered)}** 筆事件")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🔴 紅色待處理", len(r_p))
+    c2.metric("🟡 黃色待處理", len(y_p))
+    c3.metric("🔵 藍色待處理", len(b_p))
+
+    st.markdown("---")
+
+    # ── 戰報預覽 ───────────────────────────────────────────────
+    show_report = st.session_state.get("edge_show_report_view", False)
+    if show_report:
+        st.markdown("#### 📄 戰報預覽")
+        filters = {
+            "range":  range_label,
+            "stores": sel_stores,
+            "levels": sel_levels,
+        }
+        report_text = generate_battle_report_filtered(filtered, filters)
+        st.code(report_text, language=None)
+
+        st.markdown("---")
+        st.markdown("#### 🤖 AI 戰略點評")
+        with st.spinner("AI 分析中..."):
+            commentary = generate_ai_strategic_summary(filtered)
+        st.markdown(
+            f'<div class="ai-commentary">{commentary}</div>',
+            unsafe_allow_html=True
+        )
+        st.caption("💡 由 Claude AI 根據篩選事件自動生成（無 API Key 時切換規則推導）")
+
+        st.markdown("---")
+        if st.button("📤 推播至 Line 總指揮", type="primary", key="report_push_btn"):
+            if _HAS_LINE_UTILS:
+                commander_id = _line_utils.get_commander_user_id()
+                if commander_id:
+                    success = _line_utils.push_message(commander_id, report_text)
+                    if success:
+                        st.success("✅ 戰報已推播至 Line 總指揮！")
+                    else:
+                        st.error("❌ 推播失敗，請確認 Line API 設定")
+                else:
+                    st.warning("⚠️ 尚未設定 Commander User ID")
+            else:
+                st.success("✅ 戰報推播（模擬模式）")
+        if st.button("🔄 重新篩選", key="report_reset_btn"):
+            st.session_state["edge_show_report_view"] = False
+            st.rerun()
+    else:
+        st.info("👈 請在左側 Sidebar 設定篩選條件，點擊「📋 生成戰報」即可預覽")
+
+        # 顯示篩選後事件清單
+        if filtered:
+            st.markdown("#### 📋 篩選結果預覽")
+            rows = []
+            for e in sorted(filtered, key=lambda x: x["created_at"], reverse=True)[:20]:
+                emoji = {"red": "🔴", "yellow": "🟡", "blue": "🔵"}.get(e["level"], "⚪")
+                rows.append({
+                    "等級": f"{emoji} {_LEVEL_LABELS.get(e['level'], e['level'])}",
+                    "門店": e["store"],
+                    "狀態": {"pending": "⏳ 待處理", "monitoring": "👀 觀察中", "closed": "✅ 已結案"}.get(e["status"], e["status"]),
+                    "內容": e["content"][:35] + ("..." if len(e["content"]) > 35 else ""),
+                    "時間": e["created_at"].strftime("%m/%d %H:%M"),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+# ================================================================
+# 檢視四：系統設定
+# ================================================================
+def render_view_settings():
 
     # ── Section A：LINE API 設定 ─────────────────────────────────
     st.markdown("### 📡 LINE API 設定")
@@ -1082,6 +1321,13 @@ def render_tab_settings():
             value=edge_store.get_setting("app_cfg_LINE_WEBHOOK_SERVER_URL") or "",
             placeholder="https://your-server.com/webhook",
         )
+        cfg_anthropic = st.text_input(
+            "Anthropic API Key（Claude AI 分析用）",
+            value=edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "",
+            type="password",
+            key="cfg_anthropic_key",
+            placeholder="sk-ant-...",
+        )
         save_btn = st.form_submit_button("💾 儲存設定", type="primary", use_container_width=True)
 
     if save_btn:
@@ -1090,16 +1336,17 @@ def render_tab_settings():
             "LINE_CHANNEL_ACCESS_TOKEN": cfg_token.strip(),
             "LINE_COMMANDER_USER_ID":    cfg_commander.strip(),
             "LINE_WEBHOOK_SERVER_URL":   cfg_webhook_url.strip(),
+            "ANTHROPIC_API_KEY":         cfg_anthropic.strip(),
         }
         for key, value in cfg_map.items():
             if value:
                 edge_store.set_setting(f"app_cfg_{key}", value)
                 os.environ[key] = value
-        st.success("✅ LINE API 設定已儲存並注入環境變數")
+        st.success("✅ 設定已儲存並注入環境變數")
         st.rerun()
 
-    # 測試連線按鈕
-    if st.button("🔌 測試連線", use_container_width=False):
+    # 測試連線按鈕（LINE）
+    if st.button("🔌 測試 LINE 連線", use_container_width=False):
         if _HAS_LINE_UTILS:
             token  = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
             secret = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -1114,6 +1361,25 @@ def render_tab_settings():
                 st.warning("⚠️ 請先填入並儲存 Channel Secret 和 Access Token")
         else:
             st.warning("⚠️ requests 套件未安裝，無法測試真實連線（目前為模擬模式）")
+
+    # 測試 Claude AI 連線按鈕
+    if st.button("🤖 測試 Claude AI 連線", use_container_width=False):
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            st.warning("⚠️ 請先填入並儲存 Anthropic API Key")
+        else:
+            try:
+                import anthropic
+                client = anthropic.Anthropic(api_key=api_key)
+                msg = client.messages.create(
+                    model="claude-3-haiku-20240307",
+                    max_tokens=30,
+                    messages=[{"role": "user", "content": "回覆「連線成功」三個字"}],
+                )
+                reply = msg.content[0].text.strip() if msg.content else "（無回應）"
+                st.success(f"🟢 Claude AI 連線成功！回應：{reply}")
+            except Exception as e:
+                st.error(f"🔴 Claude AI 連線失敗：{e}")
 
     st.divider()
 
@@ -1131,7 +1397,7 @@ def render_tab_settings():
                 st.caption(f"訊息數：{g['msg_count']} · 最後：{g['last_seen'][:16]}")
                 cb_col, btn_col = st.columns([3, 1])
                 quick_store = cb_col.selectbox(
-                    "門店", ["(略過)"] + STORE_LIST,
+                    "門店", ["(略過)"] + get_store_list(),
                     key=f"quick_{g['group_id']}"
                 )
                 if btn_col.button("綁定", key=f"qbind_{g['group_id']}",
@@ -1165,7 +1431,7 @@ def render_tab_settings():
     )
     new_store = col_store.selectbox(
         "對應門店（預設帶入戰情室門店名稱）",
-        STORE_LIST,
+        get_store_list(),
         key="edge_new_store",
     )
     if st.button("新增綁定", use_container_width=False, key="edge_add_group"):
@@ -1178,7 +1444,57 @@ def render_tab_settings():
 
     st.divider()
 
-    # ── Section C：開發者工具 ────────────────────────────────────
+    # ── Section C：門店管理 ───────────────────────────────────────
+    st.markdown("### 🏪 門店管理")
+    current_stores = get_store_list()
+
+    st.markdown(f"目前共 **{len(current_stores)}** 間門店")
+
+    # 以每列 3 欄顯示門店，每個旁有刪除按鈕
+    cols_per_row = 3
+    for row_start in range(0, len(current_stores), cols_per_row):
+        row_stores = current_stores[row_start: row_start + cols_per_row]
+        cols = st.columns(cols_per_row)
+        for idx, sname in enumerate(row_stores):
+            with cols[idx]:
+                scol1, scol2 = st.columns([4, 1])
+                scol1.markdown(f"**{sname}**")
+                if scol2.button("✕", key=f"del_store_{sname}_{row_start}_{idx}",
+                                help=f"刪除 {sname}"):
+                    new_list = [s for s in current_stores if s != sname]
+                    edge_store.set_setting("app_custom_store_list", _json.dumps(new_list))
+                    st.rerun()
+
+    st.markdown("---")
+    st.markdown("#### ➕ 新增門店名稱")
+    add_col1, add_col2 = st.columns([4, 1])
+    new_store_name = add_col1.text_input(
+        "門店名稱",
+        key="new_store_name_input",
+        placeholder="例：信義店",
+        label_visibility="collapsed",
+    )
+    if add_col2.button("新增", key="add_store_btn"):
+        if new_store_name.strip():
+            if new_store_name.strip() not in current_stores:
+                new_list = current_stores + [new_store_name.strip()]
+                edge_store.set_setting("app_custom_store_list", _json.dumps(new_list))
+                st.toast(f"✅ 已新增門店：{new_store_name.strip()}")
+                st.rerun()
+            else:
+                st.warning(f"「{new_store_name.strip()}」已存在")
+        else:
+            st.warning("請輸入門店名稱")
+
+    st.markdown("---")
+    if st.button("🔄 重置為預設清單", key="reset_store_list_btn", type="secondary"):
+        edge_store.set_setting("app_custom_store_list", "")
+        st.toast("✅ 門店清單已重置為系統預設")
+        st.rerun()
+
+    st.divider()
+
+    # ── Section D：開發者工具 ────────────────────────────────────
     st.markdown("### 🔧 開發者工具")
     with st.expander("🔧 開發者工具（測試/壓力/維護）", expanded=False):
 
@@ -1187,7 +1503,7 @@ def render_tab_settings():
         with col_a:
             if st.button("📨 隨機模擬 Webhook", use_container_width=True, key="dev_sim_random"):
                 tmpl    = random.choice(_WEBHOOK_TEMPLATES)
-                store   = random.choice(STORE_LIST)
+                store   = random.choice(get_store_list())
                 content = tmpl["content"].format(store=store)
                 result  = process_webhook(content, user=tmpl["user"], store=store)
                 st.session_state.edge_webhook_result = result
@@ -1233,7 +1549,7 @@ def render_tab_settings():
             with st.spinner("壓力測試中..."):
                 for i in range(20):
                     tmpl    = random.choice(_WEBHOOK_TEMPLATES)
-                    store   = random.choice(STORE_LIST)
+                    store   = random.choice(get_store_list())
                     content = tmpl["content"].format(store=store)
                     unique_user = f"壓測_{i:02d}_{random.randint(100,999)}"
                     process_webhook(content, user=unique_user, store=store)
@@ -1256,31 +1572,6 @@ def render_tab_settings():
             st.session_state.edge_show_learning = True
             st.rerun()
 
-        st.markdown("---")
-
-        st.markdown("#### 🗑️ 清除全部事件")
-        st.caption("⚠️ 此操作不可復原，將清除所有事件記錄")
-        confirm_clear = st.checkbox("我確認要清除所有事件", key="dev_confirm_clear")
-        if st.button(
-            "🗑️ 清除全部事件",
-            use_container_width=True,
-            key="dev_clear_btn",
-            type="secondary",
-            disabled=not confirm_clear,
-        ):
-            try:
-                import sqlite3
-                db_path = os.environ.get("EDGE_DB_PATH", "/tmp/edge_agent.db")
-                with sqlite3.connect(db_path) as con:
-                    con.execute("DELETE FROM events")
-                    con.execute("DELETE FROM webhook_cache")
-                st.session_state.edge_seeded = False
-                st.session_state.edge_webhook_result = None
-                st.success("✅ 已清除所有事件與 Webhook 緩存")
-                st.rerun()
-            except Exception as e:
-                st.error(f"清除失敗：{e}")
-
 
 # ================================================================
 # 主程式
@@ -1294,32 +1585,31 @@ def main():
     run_daily_maintenance()
     check_scheduled_report_push()
 
-    render_sidebar()
+    evts = edge_store.load_events()
+
+    render_sidebar(evts)
 
     # ── 頁面標題 ─────────────────────────────────────────────────
     st.markdown("""
 <div class="main-header">
     <h1 style="margin:0;">🛡️ 嗑肉數位總部</h1>
     <p style="margin:5px 0 0 0;opacity:0.9;">
-        Line 邊緣代理人 v5.0 · 智能儀表板 · 三色看板 · 系統設定<br>
-        <small>跑馬燈告警 · AI 智能概況 · LINE API App 內設定 · 開發者工具</small>
+        Line 邊緣代理人 v6.0 · 智能儀表板 · 三色看板 · 戰報中心 · 系統設定<br>
+        <small>Sidebar 導覽 · 門店管理 · Claude AI API · 跑馬燈告警 · AI 智能概況</small>
     </p>
 </div>
 """, unsafe_allow_html=True)
 
-    evts = edge_store.load_events()
-
-    # ── 三個 Tab ──────────────────────────────────────────────────
-    tab1, tab2, tab3 = st.tabs(["📊 智能儀表板", "🎯 事件看板", "⚙️ 系統設定"])
-
-    with tab1:
-        render_tab_dashboard(evts)
-
-    with tab2:
-        render_tab_kanban(evts)
-
-    with tab3:
-        render_tab_settings()
+    # ── 根據 edge_view 渲染對應頁面 ──────────────────────────────
+    view = st.session_state.get("edge_view", "dashboard")
+    if view == "dashboard":
+        render_view_dashboard(evts)
+    elif view == "kanban":
+        render_view_kanban(evts)
+    elif view == "report":
+        render_view_report(evts)
+    elif view == "settings":
+        render_view_settings()
 
     # ── Dialog 觸發 ───────────────────────────────────────────────
     if st.session_state.get("edge_show_report"):
