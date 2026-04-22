@@ -446,7 +446,7 @@ def generate_ai_strategic_summary(events: list[dict]) -> str:
                 "請直接輸出 3 句戰略建議，無需標題或編號。"
             )
             msg = client.messages.create(
-                model="claude-3-haiku-20240307",
+                model="claude-haiku-4-5",
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -1002,7 +1002,7 @@ def render_sidebar(evts: list[dict]):
                 st.caption("🔴 API 錯誤")
                 st.caption("→ 請確認 Key 是否正確")
             else:
-                st.caption("🟢 已設定（claude-3-haiku）")
+                st.caption("🟢 已設定（claude-haiku-4-5）")
         else:
             st.caption("⚪ 尚未設定 API Key")
             st.caption("→ 請至「⚙️ 系統設定」填入")
@@ -1074,7 +1074,7 @@ def render_view_dashboard(evts: list[dict]):
             "→ 請至 **⚙️ 系統設定 → 🤖 Claude AI 設定** 確認 API Key 是否正確。"
         )
     else:
-        st.caption("🟢 由 Claude AI (claude-3-haiku) 根據今日事件自動生成")
+        st.caption("🟢 由 Claude AI (claude-haiku-4-5) 根據今日事件自動生成")
 
     st.markdown("---")
 
@@ -1480,7 +1480,7 @@ def render_view_settings():
                         import anthropic
                         client = anthropic.Anthropic(api_key=api_key)
                         msg = client.messages.create(
-                            model="claude-3-haiku-20240307",
+                            model="claude-haiku-4-5",
                             max_tokens=30,
                             messages=[{"role": "user", "content": "請回覆「嗑肉連線成功」六個字"}],
                         )
