@@ -202,6 +202,8 @@ def show_login():
                         allowed.add("系統設定")
                         st.session_state["enabled_pages"] = allowed
                     st.session_state["user_role"] = user_cfg.get("role", "viewer")
+                    # 清除 multiselect widget 快取，確保登入後以最新 allowed_pages 為 default
+                    st.session_state.pop("sidebar_pages_multiselect", None)
                     st.rerun()
                 else:
                     st.error("❌ 密鑰錯誤，請重新輸入")
@@ -252,6 +254,7 @@ def show_portal():
                 options=all_display,
                 default=default_display,
                 label_visibility="collapsed",
+                key="sidebar_pages_multiselect",
             )
         else:
             # Non-admin: show read-only list of their allowed pages
