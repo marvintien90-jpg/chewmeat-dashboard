@@ -66,18 +66,21 @@ for _k in _LINE_CFG_KEYS:
         if _v:
             os.environ[_k] = _v
 
-# ── Claude AI API Key 注入 ───────────────────────────────────────
+# ── Claude AI API Key 注入（優先順序：st.secrets → SQLite → os.environ 維持原值）──
 if not os.environ.get("ANTHROPIC_API_KEY"):
-    _v = edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY")
-    if _v:
-        os.environ["ANTHROPIC_API_KEY"] = _v
+    # 1. Streamlit Cloud Secrets（永久儲存，優先）
+    _secrets_key = ""
+    try:
+        _secrets_key = (st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip()
+    except Exception:
+        pass
+    if _secrets_key:
+        os.environ["ANTHROPIC_API_KEY"] = _secrets_key
     else:
-        try:
-            _v = st.secrets.get("ANTHROPIC_API_KEY", "")
-            if _v:
-                os.environ["ANTHROPIC_API_KEY"] = _v
-        except Exception:
-            pass
+        # 2. SQLite（本機 / 同一 session 內有效）
+        _sqlite_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
+        if _sqlite_key:
+            os.environ["ANTHROPIC_API_KEY"] = _sqlite_key
 
 # ================================================================
 # CSS
@@ -215,7 +218,6 @@ def _edge_init():
     defaults = {
         "edge_show_closed":      False,
         "edge_last_scan":        datetime.now(),
-        "edge_seeded":           False,
         "edge_webhook_result":   None,
         "edge_last_auto_check":  None,
         "edge_last_maintenance": None,
@@ -234,49 +236,7 @@ def _edge_init():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-
-    if not st.session_state.edge_seeded:
-        if edge_store.count_events() == 0:
-            for evt in _generate_mock_events():
-                edge_store.save_event(evt)
-        st.session_state.edge_seeded = True
-
-
-def _generate_mock_events() -> list[dict]:
-    store_list = get_store_list()
-    # 門店清單為空時用內建示範清單，避免 random.choice([]) 崩潰
-    _fallback = ["崇德店", "美村店", "公益店", "北屯店", "南屯店",
-                 "西屯店", "東區店", "北區店", "南區店", "中區店"]
-    _pool = store_list if store_list else _fallback
-    samples = [
-        ("red",    "red-equipment",   "崇德店 POS 機故障，無法結帳！",          "店員小美", 5),
-        ("red",    "red-temperature", "美村店冷藏櫃溫度異常，商品可能要報廢",    "店員阿強", 3),
-        ("red",    "red-power",       "公益店招牌電源故障，晚上無法運作",         "店長王姐", 1),
-        ("yellow", "yellow-staffing", "北屯店人手不足，請求支援一名工讀生",       "店長阿豪", 2),
-        ("yellow", "yellow-material", "南屯店周末活動需要額外協助準備物料",       "店員Amy",  1),
-        ("yellow", "yellow-delivery", "西屯店需要支援配送，訂單量突增",           "店長老陳", 0),
-        ("blue",   "blue-inventory",  "東區店米食原料庫存不足，請安排補貨",       "店員小林", 6),
-        ("blue",   "blue-task",       "北區店盤點作業完成，等待總部處理",         "店長小花", 4),
-        ("blue",   "blue-inventory",  "南區店包材補貨任務已派發",                 "店員阿傑", 3),
-        ("blue",   "blue-task",       "中區店每日結帳任務已完成",                 "店長Mark", 1),
-    ]
-    events = []
-    for i, (lv, cat, content, user, hr) in enumerate(samples):
-        status = "closed" if i == 9 else "pending"
-        events.append({
-            "id": i + 1,
-            "level": lv,
-            "keyword_cat": cat,
-            "store": random.choice(_pool),
-            "user_alias": user,
-            "content": content,
-            "created_at": datetime.now() - timedelta(hours=hr, minutes=random.randint(0, 59)),
-            "status": status,
-            "assigned_to": None,
-            "response_deadline": None,
-            "monitoring_until": None,
-        })
-    return events
+    # 不再自動植入 mock 事件，讓系統從空白狀態啟動
 
 
 # ================================================================
@@ -456,10 +416,16 @@ def generate_ai_strategic_summary(events: list[dict]) -> str:
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
+        # fallback 1: st.secrets（Streamlit Cloud 永久設定）
         try:
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or ""
+            api_key = (st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip()
         except Exception:
             pass
+    if not api_key:
+        # fallback 2: SQLite（本 session 設定）
+        api_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
+    if api_key:
+        os.environ["ANTHROPIC_API_KEY"] = api_key  # 確保後續流程一致
 
     if api_key:
         # 清除上次錯誤
@@ -1366,13 +1332,23 @@ def render_view_settings():
         st.markdown("#### 🔧 系統狀態總覽")
         st.caption("各模組設定一覽，快速確認是否已完成初始化。")
 
-        # Claude AI
+        # Claude AI — 偵測 Key 來源
         _ai_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         _ai_err = st.session_state.get("edge_ai_last_error", "")
-        if _ai_key and not _ai_err:
-            ai_status = "🟢 已設定且可用（claude-3-5-haiku）"
-        elif _ai_key and _ai_err:
-            ai_status = f"🔴 已設定但呼叫失敗：{_ai_err[:60]}"
+        _ai_secrets = ""
+        try:
+            _ai_secrets = (st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip()
+        except Exception:
+            pass
+        _ai_sqlite = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
+        if _ai_err:
+            ai_status = f"🔴 呼叫失敗：{_ai_err[:60]}"
+        elif _ai_secrets:
+            ai_status = "🟢 已設定（來源：Streamlit Cloud Secrets，永久有效）"
+        elif _ai_sqlite:
+            ai_status = "🟡 已設定（來源：SQLite，重啟後失效）"
+        elif _ai_key:
+            ai_status = "🔵 已設定（來源：環境變數）"
         else:
             ai_status = "⚪ 尚未設定 API Key"
 
@@ -1426,75 +1402,131 @@ def render_view_settings():
     # ──────────────────────────────────────────────────────────────
     with tab_ai:
         st.markdown("#### 🤖 Claude AI 設定")
-        st.caption(
-            "填入 Anthropic API Key 後，儀表板的「AI 智能概況」將由 Claude 即時分析生成，"
-            "取代規則推導摘要。Key 僅儲存在本機 SQLite，不會上傳至第三方。"
-        )
 
-        # 目前狀態顯示
-        _cur_key = edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or ""
-        if _cur_key:
-            masked = _cur_key[:8] + "..." + _cur_key[-4:] if len(_cur_key) > 12 else "（已設定）"
-            st.success(f"🟢 目前已儲存 API Key：`{masked}`")
+        # ── 偵測當前 Key 來源 ──────────────────────────────────────
+        _env_key     = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        _sqlite_key  = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
+        _secrets_key = ""
+        try:
+            _secrets_key = (st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip()
+        except Exception:
+            pass
+
+        # 決定顯示哪個來源
+        if _secrets_key:
+            _masked = _secrets_key[:8] + "..." + _secrets_key[-4:] if len(_secrets_key) > 12 else "（已設定）"
+            st.success(f"🟢 **Streamlit Cloud Secrets** 已設定 API Key：`{_masked}`")
+            st.caption("此為最高優先來源，App 重啟後仍有效。")
+        elif _sqlite_key:
+            _masked = _sqlite_key[:8] + "..." + _sqlite_key[-4:] if len(_sqlite_key) > 12 else "（已設定）"
+            st.warning(
+                f"🟡 **SQLite（暫存）** 已設定 API Key：`{_masked}`\n\n"
+                "⚠️ 此儲存方式在 **Streamlit Cloud 重啟後會清空**。"
+                "請將 Key 設定到 Streamlit Cloud Secrets 以確保永久生效（見下方說明）。"
+            )
+        elif _env_key:
+            st.info("🔵 API Key 已在環境變數中（本 session 有效）")
         else:
-            st.info("⚪ 尚未設定 API Key")
+            st.error("⚪ 尚未設定任何 API Key")
 
+        st.divider()
+
+        # ── 儲存表單 ──────────────────────────────────────────────
+        st.markdown("**📝 輸入並儲存 API Key**")
         with st.form("ai_api_form"):
             cfg_anthropic = st.text_input(
                 "Anthropic API Key",
                 value="",
                 type="password",
-                placeholder="sk-ant-api03-... （留空則保留原有設定）",
+                placeholder="sk-ant-api03-xxxxxxxx（留空則不更新）",
             )
-            ai_save_btn = st.form_submit_button("💾 儲存 AI 設定", type="primary", use_container_width=True)
+            ai_save_btn = st.form_submit_button("💾 儲存到 SQLite（本 session）", type="primary", use_container_width=True)
 
         if ai_save_btn:
-            if cfg_anthropic.strip():
-                edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", cfg_anthropic.strip())
-                os.environ["ANTHROPIC_API_KEY"] = cfg_anthropic.strip()
+            _new_key = cfg_anthropic.strip()
+            if _new_key:
+                edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", _new_key)
+                os.environ["ANTHROPIC_API_KEY"] = _new_key
                 st.session_state.pop("edge_ai_last_error", None)
-                st.success("✅ Anthropic API Key 已儲存並注入環境")
+                st.success("✅ API Key 已儲存至 SQLite 並注入本 session 環境")
+                st.info(
+                    "💡 **要讓 Key 在 Streamlit Cloud 重啟後仍有效**，"
+                    "請到 Streamlit Cloud dashboard → 你的 App → Settings → Secrets，"
+                    "新增一行：\n\n`ANTHROPIC_API_KEY = \"你的key\"`"
+                )
                 st.rerun()
             else:
                 st.warning("⚠️ 未輸入任何值，原設定不變")
 
         st.divider()
 
-        # 測試連線
-        if st.button("🤖 立即測試 Claude AI 連線", use_container_width=False, key="test_ai_btn"):
+        # ── 測試連線 ──────────────────────────────────────────────
+        st.markdown("**🔌 測試 Claude AI 連線**")
+        if st.button("🤖 立即測試", use_container_width=False, key="test_ai_btn", type="primary"):
+            # 按優先順序取得 key
             api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
             if not api_key:
-                _stored = edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or ""
-                if _stored:
-                    os.environ["ANTHROPIC_API_KEY"] = _stored
-                    api_key = _stored
+                try:
+                    api_key = (st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip()
+                except Exception:
+                    pass
             if not api_key:
-                st.warning("⚠️ 請先填入並儲存 Anthropic API Key")
+                api_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
+            if not api_key:
+                st.warning("⚠️ 請先設定 Anthropic API Key（見上方說明）")
             else:
-                with st.spinner("連線測試中..."):
+                with st.spinner("連線測試中，請稍候..."):
                     try:
                         import anthropic
                         client = anthropic.Anthropic(api_key=api_key)
                         msg = client.messages.create(
                             model="claude-3-5-haiku-20241022",
                             max_tokens=30,
-                            messages=[{"role": "user", "content": "回覆「連線成功」三個字"}],
+                            messages=[{"role": "user", "content": "請回覆「嗑肉連線成功」六個字"}],
                         )
                         reply = msg.content[0].text.strip() if msg.content else "（無回應）"
+                        # 測試成功：注入 env 並清錯誤
+                        os.environ["ANTHROPIC_API_KEY"] = api_key
                         st.session_state.pop("edge_ai_last_error", None)
-                        st.success(f"🟢 Claude AI 連線成功！回應：{reply}")
+                        st.success(f"🟢 **Claude AI 連線成功！** 模型回應：{reply}")
+                        st.balloons()
                     except Exception as e:
-                        st.session_state["edge_ai_last_error"] = str(e)
-                        st.error(f"🔴 Claude AI 連線失敗：{e}")
+                        err_msg = str(e)
+                        st.session_state["edge_ai_last_error"] = err_msg
+                        st.error(f"🔴 **連線失敗**：`{err_msg}`")
+                        if "authentication" in err_msg.lower() or "api_key" in err_msg.lower() or "401" in err_msg:
+                            st.warning("→ API Key 無效或已過期，請重新申請：https://console.anthropic.com/")
+                        elif "credit" in err_msg.lower() or "quota" in err_msg.lower() or "402" in err_msg:
+                            st.warning("→ 帳戶額度不足，請至 Anthropic Console 充值")
+                        elif "not_found" in err_msg.lower() or "404" in err_msg:
+                            st.warning("→ 模型名稱錯誤或不可用，已自動回退至規則推導")
 
-        if edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") and st.button(
-            "🗑️ 清除已儲存的 API Key", key="clear_ai_key_btn", type="secondary"
-        ):
-            edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", "")
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            st.session_state.pop("edge_ai_last_error", None)
-            st.toast("✅ API Key 已清除")
-            st.rerun()
+        st.divider()
+
+        # ── Streamlit Cloud Secrets 設定說明 ───────────────────────
+        with st.expander("📖 如何永久儲存 API Key（Streamlit Cloud）", expanded=not bool(_secrets_key)):
+            st.markdown("""
+**步驟：**
+1. 前往 [Streamlit Cloud](https://share.streamlit.io/) → 找到你的 App
+2. 點擊右上角 **⋮** → **Settings**
+3. 選擇 **Secrets** 頁籤
+4. 在文字框中加入：
+```toml
+ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
+```
+5. 點擊 **Save** → App 會自動重啟並套用
+
+✅ 設定後每次重啟都會自動載入，不需要再手動輸入。
+""")
+
+        # ── 清除按鈕 ──────────────────────────────────────────────
+        if _sqlite_key:
+            if st.button("🗑️ 清除 SQLite 中的 API Key", key="clear_ai_key_btn", type="secondary"):
+                edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", "")
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+                st.session_state.pop("edge_ai_last_error", None)
+                st.toast("✅ SQLite 中的 API Key 已清除")
+                st.rerun()
 
     # ──────────────────────────────────────────────────────────────
     # Tab 3：門店管理
