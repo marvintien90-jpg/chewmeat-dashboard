@@ -24,22 +24,25 @@ services:
 
     envVars:
       - key: EDGE_DB_PATH
-        value: /data/edge_agent.db   # 對應 disk.mountPath
+        value: /tmp/edge_agent.db    # Free tier 使用 /tmp（重啟後清空，可接受短期使用）
+                                     # 升級為 Starter plan 後可改 /data/edge_agent.db 並加 disk 區塊
 
       - key: LINE_REPLY_ON_EVENT
-        value: "true"                 # 收到訊息後自動回覆確認
+        value: "true"                # 收到訊息後自動回覆確認
 
       # ⚠️ 以下三個金鑰請在 Render Dashboard > Environment 手動填入，勿提交至 Git
       - key: LINE_CHANNEL_SECRET
-        sync: false                   # 在 Render Dashboard 填入
+        sync: false                  # 在 Render Dashboard 填入
 
       - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false                   # 在 Render Dashboard 填入
+        sync: false                  # 在 Render Dashboard 填入
 
       - key: LINE_GROUP_STORE_MAP
-        sync: false                   # JSON: {"C群組ID": "門店名"}，在 Dashboard 填入
+        sync: false                  # JSON: {"C群組ID": "門店名"}，在 Dashboard 填入
 
-    disk:
-      name: kerou-edge-db
-      mountPath: /data
-      sizeGB: 1
+# ── 持久磁碟（升級 Starter plan 後取消註解）────────────────────────────
+# 注意：Render free plan 不支援 disk，取消下方註解前需先升級方案
+#    disk:
+#      name: kerou-edge-db
+#      mountPath: /data
+#      sizeGB: 1

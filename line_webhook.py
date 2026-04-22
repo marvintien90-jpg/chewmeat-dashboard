@@ -332,6 +332,41 @@ async def list_groups():
     return {"groups": edge_store.load_line_groups()}
 
 
+@app.get("/api/unrecognized_groups")
+async def get_unrecognized_groups_api():
+    """
+    未辨識群組列表（有訊息但尚未綁定門店）。
+    供 Streamlit Dashboard 在「群組綁定」Tab 顯示快速綁定介面。
+    """
+    groups = edge_store.get_unrecognized_groups()
+    return {"groups": [dict(g) for g in groups]}
+
+
+@app.get("/api/unrecognized_groups/{group_id}/messages")
+async def get_group_messages_api(group_id: str, limit: int = 5):
+    """取得指定未辨識群組最近幾筆訊息，幫助辨識是哪間門店。"""
+    msgs = edge_store.get_group_recent_messages(group_id, limit)
+    return {"messages": [dict(m) for m in msgs]}
+
+
+@app.delete("/api/unrecognized_groups/{group_id}")
+async def dismiss_group_api(group_id: str):
+    """
+    移除未辨識群組的 webhook_cache 紀錄（略過不綁定）。
+    """
+    edge_store.dismiss_unrecognized_group(group_id)
+    return {"ok": True, "group_id": group_id}
+
+
+@app.delete("/api/groups/{group_id}")
+async def delete_group_api(group_id: str):
+    """
+    刪除群組→門店對應綁定。
+    """
+    edge_store.delete_line_group(group_id)
+    return {"ok": True, "group_id": group_id}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("line_webhook:app", host="0.0.0.0", port=8000, reload=True)

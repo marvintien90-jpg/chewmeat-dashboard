@@ -1,7 +1,9 @@
 """
-6_Line邊緣代理人.py — v6.1
+6_Line邊緣代理人.py — v6.2
 嗑肉數位總部：Line 邊緣代理人全景看板
-v6.1：Claude AI 修正 / 門店預設空清單 / 設定 Tabs 重排 / UX 全面提升
+v6.2：Render Webhook Server 橋接層 / 遠端 REST API 模式
+      LINE 訊息接收架構：LINE → Render FastAPI → REST API → Streamlit Cloud
+      群組操作全面支援遠端 API（unrecognized_groups / groups CRUD）
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -50,6 +52,166 @@ try:
     _HAS_PLOTLY = True
 except ImportError:
     _HAS_PLOTLY = False
+
+# ================================================================
+# 遠端 Webhook Server 橋接層 (v6.2)
+# ================================================================
+# 當 LINE_WEBHOOK_SERVER_URL 指向真實 Render 伺服器時，
+# 自動透過 REST API 讀取事件與群組，解決 Streamlit Cloud + Render 跨服務資料共享問題。
+# localhost / 127.0.0.1 視為本機開發模式，仍直接讀本機 SQLite。
+
+def _get_webhook_base_url() -> str:
+    """
+    取得 Webhook Server Base URL。
+    優先順序：st.secrets → os.environ → SQLite 設定。
+    localhost / 127.0.0.1 = 本機模式，回傳空字串。
+    """
+    url = ""
+    try:
+        url = (st.secrets.get("LINE_WEBHOOK_SERVER_URL", "") or "").strip().rstrip("/")
+    except Exception:
+        pass
+    if not url:
+        url = os.environ.get("LINE_WEBHOOK_SERVER_URL", "").strip().rstrip("/")
+    if not url:
+        url = (edge_store.get_setting("app_cfg_LINE_WEBHOOK_SERVER_URL") or "").strip().rstrip("/")
+    # localhost = 本機模式（不走遠端 API）
+    if url and "localhost" not in url and "127.0.0.1" not in url:
+        return url
+    return ""
+
+
+def _remote_get(path: str, timeout: int = 6) -> dict | None:
+    """對 Webhook Server 發 GET 請求；失敗回傳 None（自動 fallback 到本機 SQLite）。"""
+    base = _get_webhook_base_url()
+    if not base:
+        return None
+    try:
+        import requests as _req
+        r = _req.get(f"{base}{path}", timeout=timeout)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+def _remote_post(path: str, body: dict, timeout: int = 6) -> bool:
+    """對 Webhook Server 發 POST 請求；成功回傳 True。"""
+    base = _get_webhook_base_url()
+    if not base:
+        return False
+    try:
+        import requests as _req
+        r = _req.post(f"{base}{path}", json=body, timeout=timeout)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _remote_delete(path: str, timeout: int = 6) -> bool:
+    """對 Webhook Server 發 DELETE 請求；成功回傳 True。"""
+    base = _get_webhook_base_url()
+    if not base:
+        return False
+    try:
+        import requests as _req
+        r = _req.delete(f"{base}{path}", timeout=timeout)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _parse_dt_safe(v):
+    """嘗試將字串解析為 datetime；失敗回傳原值。"""
+    if v and isinstance(v, str):
+        try:
+            return datetime.fromisoformat(v)
+        except Exception:
+            pass
+    return v
+
+
+# ── 智能資料載入（遠端優先 → 本機 SQLite fallback）────────────────
+
+def load_events_smart() -> list[dict]:
+    """
+    載入事件：
+    1. 若 Webhook Server URL 已設定 → 呼叫 GET /api/events
+    2. 否則 → 讀本機 SQLite（開發模式 / 尚未部署）
+    """
+    data = _remote_get("/api/events", timeout=5)
+    if data is not None:
+        evts = data.get("events", [])
+        for e in evts:
+            for k in ("created_at", "response_deadline", "monitoring_until", "auto_closed_at"):
+                e[k] = _parse_dt_safe(e.get(k))
+            e.setdefault("user", e.get("user_alias", ""))
+        return evts
+    return edge_store.load_events()
+
+
+def load_groups_smart() -> list[dict]:
+    """載入群組綁定清單：遠端優先 → 本機 SQLite。"""
+    data = _remote_get("/api/groups", timeout=5)
+    if data is not None:
+        return data.get("groups", [])
+    return edge_store.load_line_groups()
+
+
+def upsert_group_smart(gid: str, store: str, bot: str = "") -> None:
+    """新增/更新群組對應（雙寫：遠端 + 本機）。"""
+    if _get_webhook_base_url():
+        _remote_post("/api/groups", {"group_id": gid, "store_name": store, "bot_name": bot})
+    edge_store.upsert_line_group(gid, store, bot)
+
+
+def delete_group_smart(gid: str) -> None:
+    """刪除群組對應（雙刪：遠端 + 本機）。"""
+    if _get_webhook_base_url():
+        _remote_delete(f"/api/groups/{gid}")
+    edge_store.delete_line_group(gid)
+
+
+def get_unrecognized_groups_smart() -> list[dict]:
+    """取得未辨識群組：遠端優先 → 本機 SQLite。"""
+    data = _remote_get("/api/unrecognized_groups", timeout=5)
+    if data is not None:
+        return data.get("groups", [])
+    return edge_store.get_unrecognized_groups()
+
+
+def dismiss_group_smart(gid: str) -> None:
+    """移除未辨識群組（雙刪：遠端 + 本機）。"""
+    if _get_webhook_base_url():
+        _remote_delete(f"/api/unrecognized_groups/{gid}")
+    edge_store.dismiss_unrecognized_group(gid)
+
+
+def get_group_messages_smart(gid: str, limit: int = 3) -> list[dict]:
+    """取得群組最近訊息：遠端優先 → 本機 SQLite。"""
+    data = _remote_get(f"/api/unrecognized_groups/{gid}/messages?limit={limit}", timeout=5)
+    if data is not None:
+        return data.get("messages", [])
+    return edge_store.get_group_recent_messages(gid, limit)
+
+
+def get_webhook_server_health() -> dict:
+    """
+    查詢 Webhook Server 健康狀態。
+    回傳：{"url": str, "online": bool, "detail": dict | None, "mode": str}
+    """
+    base = _get_webhook_base_url()
+    if not base:
+        return {"url": "", "online": False, "detail": None, "mode": "local"}
+    try:
+        import requests as _req
+        r = _req.get(f"{base}/health", timeout=4)
+        if r.status_code == 200:
+            return {"url": base, "online": True, "detail": r.json(), "mode": "remote"}
+        return {"url": base, "online": False, "detail": {"http": r.status_code}, "mode": "remote"}
+    except Exception as e:
+        return {"url": base, "online": False, "detail": {"error": str(e)[:80]}, "mode": "remote"}
 
 # ================================================================
 # LINE API 設定：頁面載入時從 SQLite 注入 os.environ
@@ -1375,12 +1537,27 @@ def render_view_settings():
         _evt_cnt = edge_store.count_events()
         evt_status = f"🟢 資料庫已有 {_evt_cnt} 筆事件" if _evt_cnt else "⚪ 尚無事件資料"
 
+        # Webhook Server 狀態（快速查詢，timeout=3 秒）
+        _wh_health = get_webhook_server_health()
+        if _wh_health["mode"] == "remote":
+            _wh_url_short = _wh_health["url"].replace("https://", "").replace("http://", "")[:40]
+            if _wh_health["online"]:
+                _wh_detail = _wh_health.get("detail") or {}
+                _evt_cnt_remote = _wh_detail.get("db_events", "?")
+                wh_status = f"🟢 線上（{_wh_url_short}，資料庫 {_evt_cnt_remote} 筆事件）"
+            else:
+                _err = (_wh_health.get("detail") or {}).get("error", "無法連線")
+                wh_status = f"🔴 離線（{_wh_url_short}）：{_err[:40]}"
+        else:
+            wh_status = "⚪ 本機模式（localhost / 尚未部署 Render）— 見「📡 LINE API」Tab 設定部署說明"
+
         rows = [
-            {"模組": "🤖 Claude AI", "狀態": ai_status},
-            {"模組": "📡 LINE API",  "狀態": line_status},
-            {"模組": "🏪 門店管理",  "狀態": store_status},
-            {"模組": "🔗 群組綁定",  "狀態": group_status},
-            {"模組": "📂 事件資料",  "狀態": evt_status},
+            {"模組": "🤖 Claude AI",        "狀態": ai_status},
+            {"模組": "🌐 Webhook Server",    "狀態": wh_status},
+            {"模組": "📡 LINE API",          "狀態": line_status},
+            {"模組": "🏪 門店管理",          "狀態": store_status},
+            {"模組": "🔗 群組綁定",          "狀態": group_status},
+            {"模組": "📂 事件資料",          "狀態": evt_status},
         ]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
@@ -1614,6 +1791,76 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
     with tab_line:
         st.markdown("#### 📡 LINE API 設定")
 
+        # ── Webhook Server 即時狀態卡 ──────────────────────────────
+        _wh = get_webhook_server_health()
+        if _wh["mode"] == "remote":
+            if _wh["online"]:
+                _d = _wh.get("detail") or {}
+                st.success(
+                    f"🟢 **Webhook Server 線上** · "
+                    f"事件：{_d.get('db_events','?')} 筆 · "
+                    f"LINE 已連線：{'✅' if _d.get('line_connected') else '❌'}\n\n"
+                    f"`{_wh['url']}`"
+                )
+            else:
+                _err = (_wh.get("detail") or {}).get("error", "連線失敗")
+                st.error(
+                    f"🔴 **Webhook Server 離線**：{_err}\n\n"
+                    f"URL：`{_wh['url']}`\n\n"
+                    "LINE 訊息目前無法接收。請確認 Render 服務正在執行。"
+                )
+        else:
+            st.warning(
+                "⚠️ **Webhook Server 尚未部署（本機模式）**\n\n"
+                "目前 LINE 訊息無法接收到 App。請部署至 Render 並填入 Webhook URL（見下方說明）。"
+            )
+
+        st.divider()
+
+        # ── Render 部署說明 ────────────────────────────────────────
+        with st.expander("🚀 如何部署 Webhook Server 到 Render？（點我展開）", expanded=not bool(_wh["mode"] == "remote" and _wh["online"])):
+            st.markdown("""
+### 讓 LINE 訊息能被接收的三步驟
+
+---
+
+**步驟一：部署到 Render**
+1. 前往 [render.com](https://render.com/) → 登入 → **New** → **Blueprint**
+2. 連接你的 GitHub Repo（`KeRou-Digital-HQ`）
+3. Render 會自動讀取 `render.yaml` 並建立服務（服務名稱：`kerou-line-webhook`）
+4. 部署完成後記下你的服務 URL：`https://kerou-line-webhook.onrender.com`
+
+**步驟二：填入 Render 環境變數**
+前往 Render Dashboard → 你的服務 → **Environment** → 新增以下三個變數：
+```
+LINE_CHANNEL_SECRET       = 你的 32 碼 Channel Secret
+LINE_CHANNEL_ACCESS_TOKEN = 你的長期 Channel Access Token
+LINE_GROUP_STORE_MAP      = {} （先留空，待群組綁定後更新）
+```
+
+**步驟三：更新 LINE Developers Console**
+1. 前往 [LINE Developers Console](https://developers.line.biz/console/)
+2. 選擇你的 Messaging API Channel → **Messaging API** 頁面
+3. **Webhook settings** → Webhook URL → 填入：
+   ```
+   https://kerou-line-webhook.onrender.com/webhook
+   ```
+4. 點 **Verify** → 確認回傳 `{"ok": true}`
+5. 開啟 **Use webhook** 開關
+
+**步驟四：將 Render URL 填入本 App**
+1. 在下方表單的「③ Webhook 伺服器 URL」填入：
+   ```
+   https://kerou-line-webhook.onrender.com
+   ```
+   （不要加 `/webhook`，只填 base URL）
+2. 儲存後 App 就會自動從 Render 讀取 LINE 訊息
+
+---
+⚠️ **注意**：Render **Free plan** 15 分鐘無請求後會休眠，LINE 訊息可能在喚醒期間遺失（~30 秒）。
+如需穩定接收，建議升級為 **Starter plan**（$7/月）。
+""")
+
         # ── 如何取得各欄位說明 ─────────────────────────────────────
         with st.expander("📖 各欄位如何取得？（點我展開）", expanded=False):
             st.markdown("""
@@ -1638,10 +1885,10 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
 
 ---
 
-**③ Webhook 伺服器 URL**
-- 本機開發：使用 [ngrok](https://ngrok.com/) 生成臨時 URL
-- 正式部署：填入 Render / Railway / 其他主機的 HTTPS URL
-- 格式：`https://your-domain.com/webhook`
+**③ Webhook 伺服器 URL（Base URL，非 Webhook 完整 URL）**
+- 本機開發：使用 [ngrok](https://ngrok.com/) 生成臨時 URL（例：`https://xxxx.ngrok.io`）
+- 正式部署：Render 服務 URL（例：`https://kerou-line-webhook.onrender.com`）
+- ⚠️ **只填 Base URL**，不要加 `/webhook`
 """)
 
         with st.form("line_api_form"):
@@ -1734,8 +1981,15 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
         if not _sl_groups:
             st.warning("⚠️ 請先至「🏪 門店管理」新增門店，才能進行群組綁定。")
 
+        # ── 資料來源提示 ─────────────────────────────────────────
+        _wh_mode = _get_webhook_base_url()
+        if _wh_mode:
+            st.info(f"🌐 **遠端模式**：群組資料來自 Webhook Server（{_wh_mode[:50]}）")
+        else:
+            st.caption("🔧 本機模式：讀取本機 SQLite（Webhook Server 尚未部署）")
+
         # ── 未辨識群組快速綁定 ────────────────────────────────────
-        unrecognized = edge_store.get_unrecognized_groups()
+        unrecognized = get_unrecognized_groups_smart()
         if unrecognized:
             with st.expander(f"🔍 未辨識群組 ({len(unrecognized)}) — 快速綁定", expanded=True):
                 st.caption("以下群組傳來訊息但尚未綁定門店。查看最近訊息以辨識是哪間門店，再選擇對應門店綁定。")
@@ -1756,12 +2010,12 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
                     # 刪除按鈕
                     if h2.button("🗑️ 刪除", key=f"dismiss_{gid}", type="secondary",
                                   help="移除此未辨識群組紀錄"):
-                        edge_store.dismiss_unrecognized_group(gid)
+                        dismiss_group_smart(gid)
                         st.toast(f"✅ 已刪除群組紀錄：{gid_short}")
                         st.rerun()
 
                     # 最近訊息預覽（幫助辨識是哪間店）
-                    recent_msgs = edge_store.get_group_recent_messages(gid, limit=3)
+                    recent_msgs = get_group_messages_smart(gid, limit=3)
                     if recent_msgs:
                         with st.expander(f"💬 最近 {len(recent_msgs)} 則訊息（點我展開辨識門店）"):
                             for m in recent_msgs:
@@ -1781,7 +2035,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
                         if btn_col.button("✅ 綁定", key=f"qbind_{gid}",
                                           disabled=(quick_store == "(略過)"),
                                           type="primary"):
-                            edge_store.upsert_line_group(gid, quick_store)
+                            upsert_group_smart(gid, quick_store)
                             st.toast(f"✅ {gid_short} → {quick_store}")
                             st.rerun()
                     else:
@@ -1789,21 +2043,28 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
 
                     st.divider()
         else:
-            st.info(
-                "📭 目前無未辨識群組。\n\n"
-                "將 Bot 加入 LINE 群組後，群組傳訊息即會自動出現在這裡。"
-            )
+            if _wh_mode:
+                st.info(
+                    "📭 目前無未辨識群組（來自 Render Webhook Server）。\n\n"
+                    "將 Bot 加入 LINE 群組後，群組傳訊息即會自動出現在這裡。"
+                )
+            else:
+                st.warning(
+                    "📭 目前無未辨識群組。\n\n"
+                    "**原因**：Webhook Server 尚未部署，LINE 訊息沒有接收端。\n"
+                    "請至「📡 LINE API」Tab 完成 Render 部署，LINE 群組訊息才能被記錄。"
+                )
 
         # ── 已綁定群組列表 ────────────────────────────────────────
         st.markdown("#### ✅ 已綁定群組")
-        groups = edge_store.load_line_groups()
+        groups = load_groups_smart()
         if groups:
             for g in groups:
                 c1, c2, c3 = st.columns([5, 3, 1])
                 c1.caption(f"`{g['group_id'][:24]}...`")
                 c2.caption(f"🏪 {g['store_name']}")
                 if c3.button("✕", key=f"del_grp_{g['group_id']}", help="解除此群組綁定"):
-                    edge_store.delete_line_group(g["group_id"])
+                    delete_group_smart(g["group_id"])
                     st.rerun()
         else:
             st.caption("尚無已綁定群組 — 請先在上方「未辨識群組」中選擇門店並綁定")
@@ -1834,7 +2095,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
             new_store = ""
         if st.button("新增綁定", use_container_width=False, key="edge_add_group"):
             if new_gid.strip() and new_store:
-                edge_store.upsert_line_group(new_gid.strip(), new_store)
+                upsert_group_smart(new_gid.strip(), new_store)
                 st.success(f"✅ 已新增：{new_gid[:24]}... → {new_store}")
                 st.rerun()
             elif not new_gid.strip():
@@ -1935,7 +2196,7 @@ def main():
     run_daily_maintenance()
     check_scheduled_report_push()
 
-    evts = edge_store.load_events()
+    evts = load_events_smart()  # 遠端 Webhook Server > 本機 SQLite
 
     render_sidebar(evts)
 
@@ -1944,8 +2205,8 @@ def main():
 <div class="main-header">
     <h1 style="margin:0;">🛡️ 嗑肉數位總部</h1>
     <p style="margin:5px 0 0 0;opacity:0.9;">
-        Line 邊緣代理人 v6.1 · 智能儀表板 · 三色看板 · 戰報中心 · 系統設定<br>
-        <small>Claude AI 修正 · 門店自訂 · 設定 Tabs · 狀態總覽 · 批次匯入</small>
+        Line 邊緣代理人 v6.2 · 智能儀表板 · 三色看板 · 戰報中心 · 系統設定<br>
+        <small>Render Webhook Server 橋接 · 遠端 REST API · LINE 訊息接收架構</small>
     </p>
 </div>
 """, unsafe_allow_html=True)
