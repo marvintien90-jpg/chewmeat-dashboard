@@ -1,7 +1,7 @@
 """
-6_Line邊緣代理人.py — v6.0
+6_Line邊緣代理人.py — v6.1
 嗑肉數位總部：Line 邊緣代理人全景看板
-v6.0：Sidebar 導覽 / 門店管理 / Claude AI API 設定 / 戰報中心 / 跑馬燈減速
+v6.1：Claude AI 修正 / 門店預設空清單 / 設定 Tabs 重排 / UX 全面提升
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -14,7 +14,7 @@ import json as _json
 
 # ── 頁面設定 ─────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="嗑肉數位總部 ｜ Line 邊緣代理人 v6",
+    page_title="嗑肉數位總部 ｜ Line 邊緣代理人 v6.1",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -182,16 +182,16 @@ is_confirmation = edge_nlp.is_confirmation
 
 
 def get_store_list() -> list[str]:
-    """取得門店清單（優先讀取使用者自訂，否則使用預設）"""
+    """取得門店清單（由使用者自行建立，預設為空清單）"""
     stored = edge_store.get_setting("app_custom_store_list")
     if stored:
         try:
             lst = _json.loads(stored)
-            if lst:
+            if isinstance(lst, list):
                 return lst
         except Exception:
             pass
-    return list(edge_nlp.STORE_LIST)
+    return []
 
 
 _WEBHOOK_TEMPLATES = [
@@ -244,6 +244,10 @@ def _edge_init():
 
 def _generate_mock_events() -> list[dict]:
     store_list = get_store_list()
+    # 門店清單為空時用內建示範清單，避免 random.choice([]) 崩潰
+    _fallback = ["崇德店", "美村店", "公益店", "北屯店", "南屯店",
+                 "西屯店", "東區店", "北區店", "南區店", "中區店"]
+    _pool = store_list if store_list else _fallback
     samples = [
         ("red",    "red-equipment",   "崇德店 POS 機故障，無法結帳！",          "店員小美", 5),
         ("red",    "red-temperature", "美村店冷藏櫃溫度異常，商品可能要報廢",    "店員阿強", 3),
@@ -263,7 +267,7 @@ def _generate_mock_events() -> list[dict]:
             "id": i + 1,
             "level": lv,
             "keyword_cat": cat,
-            "store": random.choice(store_list),
+            "store": random.choice(_pool),
             "user_alias": user,
             "content": content,
             "created_at": datetime.now() - timedelta(hours=hr, minutes=random.randint(0, 59)),
@@ -281,7 +285,8 @@ def _generate_mock_events() -> list[dict]:
 def process_webhook(content: str, user: str = "模擬用戶",
                     store: str = "") -> dict:
     if not store:
-        store = random.choice(get_store_list())
+        _sl = get_store_list()
+        store = random.choice(_sl) if _sl else "未指定門店"
 
     wh_id = edge_store.cache_webhook(content, "sim_user", "sim_group")
 
@@ -457,6 +462,8 @@ def generate_ai_strategic_summary(events: list[dict]) -> str:
             pass
 
     if api_key:
+        # 清除上次錯誤
+        st.session_state.pop("edge_ai_last_error", None)
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
@@ -473,13 +480,13 @@ def generate_ai_strategic_summary(events: list[dict]) -> str:
                 "請直接輸出 3 句戰略建議，無需標題或編號。"
             )
             msg = client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=250,
+                model="claude-3-5-haiku-20241022",
+                max_tokens=300,
                 messages=[{"role": "user", "content": prompt}],
             )
             return msg.content[0].text.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            st.session_state["edge_ai_last_error"] = str(e)
 
     # Rule-based Fallback
     lines = []
@@ -992,7 +999,8 @@ def render_sidebar(evts: list[dict]):
         st.page_link("app.py", label="← 返回總部大門")
         st.divider()
 
-        st.markdown("**📡 Line API**")
+        # ── Line API 狀態 ──────────────────────────────────────────
+        st.markdown("**📡 LINE API**")
         if _HAS_LINE_UTILS:
             token  = _line_utils.get_channel_access_token()
             secret = _line_utils.get_channel_secret()
@@ -1019,11 +1027,41 @@ def render_sidebar(evts: list[dict]):
         else:
             st.caption("⚪ 模擬模式（requests 未安裝）")
 
+        # ── Claude AI 狀態 ─────────────────────────────────────────
+        st.markdown("**🤖 Claude AI**")
+        _ai_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if _ai_key:
+            _ai_err = st.session_state.get("edge_ai_last_error")
+            if _ai_err:
+                st.caption("🔴 API 錯誤")
+                st.caption("→ 請確認 Key 是否正確")
+            else:
+                st.caption("🟢 已設定（claude-3-5-haiku）")
+        else:
+            st.caption("⚪ 尚未設定 API Key")
+            st.caption("→ 請至「⚙️ 系統設定」填入")
+
+        # ── 門店快速狀態 ───────────────────────────────────────────
+        _sc = len(get_store_list())
+        st.markdown("**🏪 門店管理**")
+        if _sc:
+            st.caption(f"🟢 已設定 {_sc} 間門店")
+        else:
+            st.caption("⚪ 尚未設定門店")
+            st.caption("→ 請至「⚙️ 系統設定」新增")
+
 
 # ================================================================
 # 檢視一：智能儀表板
 # ================================================================
 def render_view_dashboard(evts: list[dict]):
+    # ── 無門店提示橫幅 ────────────────────────────────────────────
+    if not get_store_list():
+        st.warning(
+            "🏪 尚未設定任何門店 — 請前往左側 **⚙️ 系統設定 → 🏪 門店管理** 新增門店，"
+            "才能正確分類事件與生成戰報。目前使用示範門店顯示模擬資料。"
+        )
+
     # ── 跑馬燈 ────────────────────────────────────────────────────
     pending_evts = [e for e in evts if e["status"] == "pending"]
     latest8 = sorted(pending_evts, key=lambda x: x["created_at"], reverse=True)[:8]
@@ -1055,7 +1093,22 @@ def render_view_dashboard(evts: list[dict]):
         f'<div class="ai-commentary">{commentary}</div>',
         unsafe_allow_html=True
     )
-    st.caption("💡 由 Claude AI 根據今日事件自動生成（無 API Key 時切換規則推導）")
+
+    # AI 狀態提示
+    _ai_key_set = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    _ai_err     = st.session_state.get("edge_ai_last_error")
+    if not _ai_key_set:
+        st.info(
+            "💡 目前顯示規則推導摘要。"
+            "前往 **⚙️ 系統設定 → 🤖 Claude AI 設定** 填入 API Key 可啟用 Claude AI 分析。"
+        )
+    elif _ai_err:
+        st.warning(
+            f"⚠️ Claude AI 呼叫失敗：`{_ai_err[:120]}`\n\n"
+            "→ 請至 **⚙️ 系統設定 → 🤖 Claude AI 設定** 確認 API Key 是否正確。"
+        )
+    else:
+        st.caption("🟢 由 Claude AI (claude-3-5-haiku) 根據今日事件自動生成")
 
     st.markdown("---")
 
@@ -1295,282 +1348,458 @@ def render_view_report(evts: list[dict]):
 # 檢視四：系統設定
 # ================================================================
 def render_view_settings():
+    st.markdown("### ⚙️ 系統設定")
 
-    # ── Section A：LINE API 設定 ─────────────────────────────────
-    st.markdown("### 📡 LINE API 設定")
-    with st.form("line_api_form"):
-        cfg_secret  = st.text_input(
-            "Channel Secret",
-            value=edge_store.get_setting("app_cfg_LINE_CHANNEL_SECRET") or "",
-            type="password",
-            placeholder="留空則不更新",
-        )
-        cfg_token   = st.text_input(
-            "Channel Access Token",
-            value=edge_store.get_setting("app_cfg_LINE_CHANNEL_ACCESS_TOKEN") or "",
-            type="password",
-            placeholder="留空則不更新",
-        )
-        cfg_commander = st.text_input(
-            "Commander User ID（總指揮 Line User ID）",
-            value=edge_store.get_setting("app_cfg_LINE_COMMANDER_USER_ID") or "",
-            placeholder="Uxxxxxxxxxxxxxxxx",
-        )
-        cfg_webhook_url = st.text_input(
-            "Webhook 伺服器 URL",
-            value=edge_store.get_setting("app_cfg_LINE_WEBHOOK_SERVER_URL") or "",
-            placeholder="https://your-server.com/webhook",
-        )
-        cfg_anthropic = st.text_input(
-            "Anthropic API Key（Claude AI 分析用）",
-            value=edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "",
-            type="password",
-            key="cfg_anthropic_key",
-            placeholder="sk-ant-...",
-        )
-        save_btn = st.form_submit_button("💾 儲存設定", type="primary", use_container_width=True)
+    tab_status, tab_ai, tab_stores, tab_line, tab_groups, tab_dev = st.tabs([
+        "🔧 系統狀態",
+        "🤖 Claude AI",
+        "🏪 門店管理",
+        "📡 LINE API",
+        "🔗 群組綁定",
+        "🧪 開發者工具",
+    ])
 
-    if save_btn:
-        cfg_map = {
-            "LINE_CHANNEL_SECRET":       cfg_secret.strip(),
-            "LINE_CHANNEL_ACCESS_TOKEN": cfg_token.strip(),
-            "LINE_COMMANDER_USER_ID":    cfg_commander.strip(),
-            "LINE_WEBHOOK_SERVER_URL":   cfg_webhook_url.strip(),
-            "ANTHROPIC_API_KEY":         cfg_anthropic.strip(),
-        }
-        for key, value in cfg_map.items():
-            if value:
-                edge_store.set_setting(f"app_cfg_{key}", value)
-                os.environ[key] = value
-        st.success("✅ 設定已儲存並注入環境變數")
-        st.rerun()
+    # ──────────────────────────────────────────────────────────────
+    # Tab 1：系統狀態總覽
+    # ──────────────────────────────────────────────────────────────
+    with tab_status:
+        st.markdown("#### 🔧 系統狀態總覽")
+        st.caption("各模組設定一覽，快速確認是否已完成初始化。")
 
-    # 測試連線按鈕（LINE）
-    if st.button("🔌 測試 LINE 連線", use_container_width=False):
-        if _HAS_LINE_UTILS:
-            token  = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
-            secret = os.environ.get("LINE_CHANNEL_SECRET", "")
-            if token and secret:
-                with st.spinner("連線測試中..."):
-                    result = _line_utils.check_connection()
-                if result.get("ok"):
-                    st.success(f"🟢 連線成功！Bot 名稱：{result.get('bot_name','—')}")
-                else:
-                    st.error(f"🔴 連線失敗：{result.get('reason','未知錯誤')}")
-            else:
-                st.warning("⚠️ 請先填入並儲存 Channel Secret 和 Access Token")
+        # Claude AI
+        _ai_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        _ai_err = st.session_state.get("edge_ai_last_error", "")
+        if _ai_key and not _ai_err:
+            ai_status = "🟢 已設定且可用（claude-3-5-haiku）"
+        elif _ai_key and _ai_err:
+            ai_status = f"🔴 已設定但呼叫失敗：{_ai_err[:60]}"
         else:
-            st.warning("⚠️ requests 套件未安裝，無法測試真實連線（目前為模擬模式）")
+            ai_status = "⚪ 尚未設定 API Key"
 
-    # 測試 Claude AI 連線按鈕
-    if st.button("🤖 測試 Claude AI 連線", use_container_width=False):
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if not api_key:
-            st.warning("⚠️ 請先填入並儲存 Anthropic API Key")
+        # LINE API
+        _line_secret = edge_store.get_setting("app_cfg_LINE_CHANNEL_SECRET") or ""
+        _line_token  = edge_store.get_setting("app_cfg_LINE_CHANNEL_ACCESS_TOKEN") or ""
+        _line_cmd    = edge_store.get_setting("app_cfg_LINE_COMMANDER_USER_ID") or ""
+        if _line_secret and _line_token:
+            line_status = "🟢 Channel Secret 與 Token 已設定"
+            if not _line_cmd:
+                line_status += "（Commander ID 未設定）"
         else:
-            try:
-                import anthropic
-                client = anthropic.Anthropic(api_key=api_key)
-                msg = client.messages.create(
-                    model="claude-3-haiku-20240307",
-                    max_tokens=30,
-                    messages=[{"role": "user", "content": "回覆「連線成功」三個字"}],
-                )
-                reply = msg.content[0].text.strip() if msg.content else "（無回應）"
-                st.success(f"🟢 Claude AI 連線成功！回應：{reply}")
-            except Exception as e:
-                st.error(f"🔴 Claude AI 連線失敗：{e}")
+            line_status = "⚪ 尚未設定 Channel Secret 或 Token"
 
-    st.divider()
+        # 門店
+        _store_list = get_store_list()
+        store_status = f"🟢 已設定 {len(_store_list)} 間門店" if _store_list else "⚪ 尚未設定任何門店"
 
-    # ── Section B：群組→門店 綁定 ────────────────────────────────
-    st.markdown("### 🔗 群組 → 門店 綁定")
+        # 群組綁定
+        _groups = edge_store.load_line_groups()
+        group_status = f"🟢 已綁定 {len(_groups)} 個群組" if _groups else "⚪ 尚無群組綁定"
 
-    # 未辨識群組快速綁定
-    unrecognized = edge_store.get_unrecognized_groups()
-    if unrecognized:
-        with st.expander(f"🔍 未辨識群組 ({len(unrecognized)}) — 快速綁定", expanded=True):
-            st.caption("以下群組傳來訊息但尚未綁定門店，請快速綁定以啟動分類。")
-            for g in unrecognized:
-                gid_short = g["group_id"][:16] + "..."
-                st.markdown(f"**`{gid_short}`**")
-                st.caption(f"訊息數：{g['msg_count']} · 最後：{g['last_seen'][:16]}")
-                cb_col, btn_col = st.columns([3, 1])
-                quick_store = cb_col.selectbox(
-                    "門店", ["(略過)"] + get_store_list(),
-                    key=f"quick_{g['group_id']}"
-                )
-                if btn_col.button("綁定", key=f"qbind_{g['group_id']}",
-                                  disabled=(quick_store == "(略過)")):
-                    edge_store.upsert_line_group(g["group_id"], quick_store)
-                    st.toast(f"✅ {gid_short} → {quick_store}")
-                    st.rerun()
-                st.divider()
+        # 事件資料
+        _evt_cnt = edge_store.count_events()
+        evt_status = f"🟢 資料庫已有 {_evt_cnt} 筆事件" if _evt_cnt else "⚪ 尚無事件資料"
 
-    # 已綁定群組列表
-    st.markdown("#### 已綁定群組")
-    groups = edge_store.load_line_groups()
-    if groups:
-        for g in groups:
-            c1, c2, c3 = st.columns([4, 4, 1])
-            c1.caption(f"`{g['group_id'][:20]}...`")
-            c2.caption(g["store_name"])
-            if c3.button("✕", key=f"del_grp_{g['group_id']}", help="刪除此對應"):
-                edge_store.delete_line_group(g["group_id"])
-                st.rerun()
-    else:
-        st.caption("尚無已綁定群組")
+        rows = [
+            {"模組": "🤖 Claude AI", "狀態": ai_status},
+            {"模組": "📡 LINE API",  "狀態": line_status},
+            {"模組": "🏪 門店管理",  "狀態": store_status},
+            {"模組": "🔗 群組綁定",  "狀態": group_status},
+            {"模組": "📂 事件資料",  "狀態": evt_status},
+        ]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    # 手動新增
-    st.markdown("#### ➕ 手動新增對應")
-    col_gid, col_store = st.columns([2, 2])
-    new_gid   = col_gid.text_input(
-        "Line 群組 ID (C 開頭)",
-        key="edge_new_gid",
-        placeholder="C1234567890abcdef...",
-    )
-    new_store = col_store.selectbox(
-        "對應門店（預設帶入戰情室門店名稱）",
-        get_store_list(),
-        key="edge_new_store",
-    )
-    if st.button("新增綁定", use_container_width=False, key="edge_add_group"):
-        if new_gid.strip():
-            edge_store.upsert_line_group(new_gid.strip(), new_store)
-            st.success(f"✅ {new_gid[:20]}... → {new_store}")
+        st.divider()
+        st.markdown("**⚡ 快速操作**")
+        qc1, qc2, qc3 = st.columns(3)
+        if qc1.button("🔄 重新載入所有設定", use_container_width=True, key="qs_reload"):
+            st.cache_data.clear()
             st.rerun()
-        else:
-            st.warning("請輸入群組 ID")
-
-    st.divider()
-
-    # ── Section C：門店管理 ───────────────────────────────────────
-    st.markdown("### 🏪 門店管理")
-    current_stores = get_store_list()
-
-    st.markdown(f"目前共 **{len(current_stores)}** 間門店")
-
-    # 以每列 3 欄顯示門店，每個旁有刪除按鈕
-    cols_per_row = 3
-    for row_start in range(0, len(current_stores), cols_per_row):
-        row_stores = current_stores[row_start: row_start + cols_per_row]
-        cols = st.columns(cols_per_row)
-        for idx, sname in enumerate(row_stores):
-            with cols[idx]:
-                scol1, scol2 = st.columns([4, 1])
-                scol1.markdown(f"**{sname}**")
-                if scol2.button("✕", key=f"del_store_{sname}_{row_start}_{idx}",
-                                help=f"刪除 {sname}"):
-                    new_list = [s for s in current_stores if s != sname]
-                    edge_store.set_setting("app_custom_store_list", _json.dumps(new_list))
-                    st.rerun()
-
-    st.markdown("---")
-    st.markdown("#### ➕ 新增門店名稱")
-    add_col1, add_col2 = st.columns([4, 1])
-    new_store_name = add_col1.text_input(
-        "門店名稱",
-        key="new_store_name_input",
-        placeholder="例：信義店",
-        label_visibility="collapsed",
-    )
-    if add_col2.button("新增", key="add_store_btn"):
-        if new_store_name.strip():
-            if new_store_name.strip() not in current_stores:
-                new_list = current_stores + [new_store_name.strip()]
-                edge_store.set_setting("app_custom_store_list", _json.dumps(new_list))
-                st.toast(f"✅ 已新增門店：{new_store_name.strip()}")
-                st.rerun()
-            else:
-                st.warning(f"「{new_store_name.strip()}」已存在")
-        else:
-            st.warning("請輸入門店名稱")
-
-    st.markdown("---")
-    if st.button("🔄 重置為預設清單", key="reset_store_list_btn", type="secondary"):
-        edge_store.set_setting("app_custom_store_list", "")
-        st.toast("✅ 門店清單已重置為系統預設")
-        st.rerun()
-
-    st.divider()
-
-    # ── Section D：開發者工具 ────────────────────────────────────
-    st.markdown("### 🔧 開發者工具")
-    with st.expander("🔧 開發者工具（測試/壓力/維護）", expanded=False):
-
-        st.markdown("#### 🤖 Webhook 模擬器")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("📨 隨機模擬 Webhook", use_container_width=True, key="dev_sim_random"):
-                tmpl    = random.choice(_WEBHOOK_TEMPLATES)
-                store   = random.choice(get_store_list())
-                content = tmpl["content"].format(store=store)
-                result  = process_webhook(content, user=tmpl["user"], store=store)
-                st.session_state.edge_webhook_result = result
-                st.rerun()
-
-        custom_msg = st.text_input(
-            "自訂模擬訊息",
-            key="dev_webhook_custom",
-            placeholder="例：崇德店 POS 故障",
-        )
-        with col_b:
-            if st.button(
-                "📤 送出自訂訊息", use_container_width=True,
-                key="dev_sim_custom",
-                disabled=not custom_msg.strip(),
-            ):
-                result = process_webhook(custom_msg.strip())
-                st.session_state.edge_webhook_result = result
-                st.rerun()
-
-        r = st.session_state.get("edge_webhook_result")
-        if r:
-            if r["type"] == "new":
-                st.success(
-                    f"✅ 新事件 #{r['id']}（{_LEVEL_LABELS.get(r['level'], r['level'])}）\n"
-                    f"{r['content'][:40]}"
-                )
-            elif r["type"] == "merged":
-                st.info(f"🔗 已合併至事件 #{r['merge_id']}\n{r['content'][:40]}")
-            else:
-                ac = r.get("auto_closed")
-                if ac:
-                    st.success(f"✅ 確認語意，已自動結案 {ac} 筆 monitoring 事件")
-                else:
-                    st.info(f"🔍 確認語意，無 monitoring 事件可結案\n{r['content'][:40]}")
-
-        st.markdown("---")
-
-        st.markdown("#### 🔥 壓力測試")
-        st.caption("一次生成 20 筆隨機事件，測試看板與 manager_weights 學習")
-        if st.button("🔥 壓力測試 (20筆)", use_container_width=True,
-                     key="dev_stress_btn", type="secondary"):
-            with st.spinner("壓力測試中..."):
-                for i in range(20):
-                    tmpl    = random.choice(_WEBHOOK_TEMPLATES)
-                    store   = random.choice(get_store_list())
-                    content = tmpl["content"].format(store=store)
-                    unique_user = f"壓測_{i:02d}_{random.randint(100,999)}"
-                    process_webhook(content, user=unique_user, store=store)
-            st.session_state.edge_webhook_result = None
-            st.success("✅ 壓力測試完成：20 筆事件已生成！")
-            st.rerun()
-
-        st.markdown("---")
-
-        st.markdown("#### 📋 立即產生戰報")
-        if st.button("📋 立即產生戰報", use_container_width=True,
-                     type="primary", key="dev_report_btn"):
+        if qc2.button("📋 立即產生戰報", use_container_width=True, key="qs_report"):
             st.session_state.edge_show_report = True
             st.rerun()
-
-        st.markdown("---")
-
-        st.markdown("#### 🧠 責任地圖 & 決策日誌")
-        if st.button("📖 查看完整日誌", key="dev_learning_btn", use_container_width=True):
+        if qc3.button("📖 責任地圖日誌", use_container_width=True, key="qs_learning"):
             st.session_state.edge_show_learning = True
             st.rerun()
+
+    # ──────────────────────────────────────────────────────────────
+    # Tab 2：Claude AI 設定
+    # ──────────────────────────────────────────────────────────────
+    with tab_ai:
+        st.markdown("#### 🤖 Claude AI 設定")
+        st.caption(
+            "填入 Anthropic API Key 後，儀表板的「AI 智能概況」將由 Claude 即時分析生成，"
+            "取代規則推導摘要。Key 僅儲存在本機 SQLite，不會上傳至第三方。"
+        )
+
+        # 目前狀態顯示
+        _cur_key = edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or ""
+        if _cur_key:
+            masked = _cur_key[:8] + "..." + _cur_key[-4:] if len(_cur_key) > 12 else "（已設定）"
+            st.success(f"🟢 目前已儲存 API Key：`{masked}`")
+        else:
+            st.info("⚪ 尚未設定 API Key")
+
+        with st.form("ai_api_form"):
+            cfg_anthropic = st.text_input(
+                "Anthropic API Key",
+                value="",
+                type="password",
+                placeholder="sk-ant-api03-... （留空則保留原有設定）",
+            )
+            ai_save_btn = st.form_submit_button("💾 儲存 AI 設定", type="primary", use_container_width=True)
+
+        if ai_save_btn:
+            if cfg_anthropic.strip():
+                edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", cfg_anthropic.strip())
+                os.environ["ANTHROPIC_API_KEY"] = cfg_anthropic.strip()
+                st.session_state.pop("edge_ai_last_error", None)
+                st.success("✅ Anthropic API Key 已儲存並注入環境")
+                st.rerun()
+            else:
+                st.warning("⚠️ 未輸入任何值，原設定不變")
+
+        st.divider()
+
+        # 測試連線
+        if st.button("🤖 立即測試 Claude AI 連線", use_container_width=False, key="test_ai_btn"):
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+            if not api_key:
+                _stored = edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or ""
+                if _stored:
+                    os.environ["ANTHROPIC_API_KEY"] = _stored
+                    api_key = _stored
+            if not api_key:
+                st.warning("⚠️ 請先填入並儲存 Anthropic API Key")
+            else:
+                with st.spinner("連線測試中..."):
+                    try:
+                        import anthropic
+                        client = anthropic.Anthropic(api_key=api_key)
+                        msg = client.messages.create(
+                            model="claude-3-5-haiku-20241022",
+                            max_tokens=30,
+                            messages=[{"role": "user", "content": "回覆「連線成功」三個字"}],
+                        )
+                        reply = msg.content[0].text.strip() if msg.content else "（無回應）"
+                        st.session_state.pop("edge_ai_last_error", None)
+                        st.success(f"🟢 Claude AI 連線成功！回應：{reply}")
+                    except Exception as e:
+                        st.session_state["edge_ai_last_error"] = str(e)
+                        st.error(f"🔴 Claude AI 連線失敗：{e}")
+
+        if edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") and st.button(
+            "🗑️ 清除已儲存的 API Key", key="clear_ai_key_btn", type="secondary"
+        ):
+            edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", "")
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            st.session_state.pop("edge_ai_last_error", None)
+            st.toast("✅ API Key 已清除")
+            st.rerun()
+
+    # ──────────────────────────────────────────────────────────────
+    # Tab 3：門店管理
+    # ──────────────────────────────────────────────────────────────
+    with tab_stores:
+        st.markdown("#### 🏪 門店管理")
+        st.caption("請自行新增您的門店名稱。門店清單將用於事件分類、看板顯示與戰報統計。")
+
+        current_stores = get_store_list()
+
+        if not current_stores:
+            st.warning("尚未設定任何門店，請使用下方「➕ 新增門店」開始建立清單。")
+        else:
+            st.markdown(f"目前共 **{len(current_stores)}** 間門店")
+            cols_per_row = 3
+            for row_start in range(0, len(current_stores), cols_per_row):
+                row_stores = current_stores[row_start: row_start + cols_per_row]
+                cols = st.columns(cols_per_row)
+                for idx, sname in enumerate(row_stores):
+                    with cols[idx]:
+                        scol1, scol2 = st.columns([4, 1])
+                        scol1.markdown(f"**{sname}**")
+                        if scol2.button("✕", key=f"del_store_{sname}_{row_start}_{idx}",
+                                        help=f"刪除 {sname}"):
+                            new_list = [s for s in current_stores if s != sname]
+                            edge_store.set_setting("app_custom_store_list", _json.dumps(new_list))
+                            st.rerun()
+
+        st.divider()
+        st.markdown("#### ➕ 新增門店名稱")
+        add_col1, add_col2 = st.columns([4, 1])
+        new_store_name = add_col1.text_input(
+            "門店名稱",
+            key="new_store_name_input",
+            placeholder="例：信義店、逢甲店、東區店…",
+            label_visibility="collapsed",
+        )
+        if add_col2.button("新增", key="add_store_btn"):
+            if new_store_name.strip():
+                if new_store_name.strip() not in current_stores:
+                    new_list = current_stores + [new_store_name.strip()]
+                    edge_store.set_setting("app_custom_store_list", _json.dumps(new_list))
+                    st.toast(f"✅ 已新增門店：{new_store_name.strip()}")
+                    st.rerun()
+                else:
+                    st.warning(f"「{new_store_name.strip()}」已存在")
+            else:
+                st.warning("請輸入門店名稱")
+
+        # 批次匯入
+        st.divider()
+        st.markdown("#### 📋 批次匯入")
+        st.caption("每行輸入一個門店名稱，按「批次新增」一次加入所有門店。")
+        bulk_input = st.text_area(
+            "批次門店清單",
+            key="bulk_store_input",
+            placeholder="崇德店\n美村店\n公益店\n北屯店",
+            height=120,
+            label_visibility="collapsed",
+        )
+        if st.button("📋 批次新增", key="bulk_add_btn", use_container_width=False):
+            lines = [l.strip() for l in bulk_input.splitlines() if l.strip()]
+            added = []
+            for s in lines:
+                if s and s not in current_stores:
+                    current_stores.append(s)
+                    added.append(s)
+            if added:
+                edge_store.set_setting("app_custom_store_list", _json.dumps(current_stores))
+                st.success(f"✅ 已批次新增 {len(added)} 間門店：{', '.join(added[:5])}{'…' if len(added) > 5 else ''}")
+                st.rerun()
+            else:
+                st.info("沒有新門店可新增（輸入的名稱已存在或為空）")
+
+        if current_stores:
+            st.divider()
+            if st.button("🗑️ 清空所有門店清單", key="clear_all_stores_btn", type="secondary"):
+                edge_store.set_setting("app_custom_store_list", _json.dumps([]))
+                st.toast("✅ 門店清單已清空")
+                st.rerun()
+
+    # ──────────────────────────────────────────────────────────────
+    # Tab 4：LINE API 設定
+    # ──────────────────────────────────────────────────────────────
+    with tab_line:
+        st.markdown("#### 📡 LINE API 設定")
+        st.caption("設定 LINE Messaging API 金鑰，啟用 Webhook 接收與戰報推播功能。")
+
+        with st.form("line_api_form"):
+            cfg_secret = st.text_input(
+                "Channel Secret",
+                value=edge_store.get_setting("app_cfg_LINE_CHANNEL_SECRET") or "",
+                type="password",
+                placeholder="留空則不更新",
+            )
+            cfg_token = st.text_input(
+                "Channel Access Token",
+                value=edge_store.get_setting("app_cfg_LINE_CHANNEL_ACCESS_TOKEN") or "",
+                type="password",
+                placeholder="留空則不更新",
+            )
+            cfg_commander = st.text_input(
+                "Commander User ID（總指揮 Line User ID）",
+                value=edge_store.get_setting("app_cfg_LINE_COMMANDER_USER_ID") or "",
+                placeholder="Uxxxxxxxxxxxxxxxx",
+            )
+            cfg_webhook_url = st.text_input(
+                "Webhook 伺服器 URL",
+                value=edge_store.get_setting("app_cfg_LINE_WEBHOOK_SERVER_URL") or "",
+                placeholder="https://your-server.com/webhook",
+            )
+            save_btn = st.form_submit_button("💾 儲存 LINE 設定", type="primary", use_container_width=True)
+
+        if save_btn:
+            cfg_map = {
+                "LINE_CHANNEL_SECRET":       cfg_secret.strip(),
+                "LINE_CHANNEL_ACCESS_TOKEN": cfg_token.strip(),
+                "LINE_COMMANDER_USER_ID":    cfg_commander.strip(),
+                "LINE_WEBHOOK_SERVER_URL":   cfg_webhook_url.strip(),
+            }
+            saved = []
+            for key, value in cfg_map.items():
+                if value:
+                    edge_store.set_setting(f"app_cfg_{key}", value)
+                    os.environ[key] = value
+                    saved.append(key)
+            if saved:
+                st.success(f"✅ 已儲存並注入：{', '.join(saved)}")
+            else:
+                st.info("⚠️ 所有欄位皆為空，設定未更新")
+            st.rerun()
+
+        st.divider()
+        if st.button("🔌 測試 LINE 連線", use_container_width=False, key="test_line_btn"):
+            if _HAS_LINE_UTILS:
+                token  = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+                secret = os.environ.get("LINE_CHANNEL_SECRET", "")
+                if token and secret:
+                    with st.spinner("連線測試中..."):
+                        result = _line_utils.check_connection()
+                    if result.get("ok"):
+                        st.success(f"🟢 連線成功！Bot 名稱：{result.get('bot_name','—')}")
+                    else:
+                        st.error(f"🔴 連線失敗：{result.get('reason','未知錯誤')}")
+                else:
+                    st.warning("⚠️ 請先填入並儲存 Channel Secret 和 Access Token")
+            else:
+                st.warning("⚠️ requests 套件未安裝，無法測試真實連線（目前為模擬模式）")
+
+    # ──────────────────────────────────────────────────────────────
+    # Tab 5：群組→門店 綁定
+    # ──────────────────────────────────────────────────────────────
+    with tab_groups:
+        st.markdown("#### 🔗 群組 → 門店 綁定")
+
+        _sl_groups = get_store_list()
+        if not _sl_groups:
+            st.warning("⚠️ 請先至「🏪 門店管理」新增門店，才能進行群組綁定。")
+
+        # 未辨識群組快速綁定
+        unrecognized = edge_store.get_unrecognized_groups()
+        if unrecognized:
+            with st.expander(f"🔍 未辨識群組 ({len(unrecognized)}) — 快速綁定", expanded=True):
+                st.caption("以下群組傳來訊息但尚未綁定門店，請快速綁定以啟動分類。")
+                for g in unrecognized:
+                    gid_short = g["group_id"][:16] + "..."
+                    st.markdown(f"**`{gid_short}`**")
+                    st.caption(f"訊息數：{g['msg_count']} · 最後：{g['last_seen'][:16]}")
+                    cb_col, btn_col = st.columns([3, 1])
+                    quick_store = cb_col.selectbox(
+                        "門店", ["(略過)"] + _sl_groups,
+                        key=f"quick_{g['group_id']}"
+                    )
+                    if btn_col.button("綁定", key=f"qbind_{g['group_id']}",
+                                      disabled=(quick_store == "(略過)")):
+                        edge_store.upsert_line_group(g["group_id"], quick_store)
+                        st.toast(f"✅ {gid_short} → {quick_store}")
+                        st.rerun()
+                    st.divider()
+
+        # 已綁定群組列表
+        st.markdown("#### 已綁定群組")
+        groups = edge_store.load_line_groups()
+        if groups:
+            for g in groups:
+                c1, c2, c3 = st.columns([4, 4, 1])
+                c1.caption(f"`{g['group_id'][:20]}...`")
+                c2.caption(g["store_name"])
+                if c3.button("✕", key=f"del_grp_{g['group_id']}", help="刪除此對應"):
+                    edge_store.delete_line_group(g["group_id"])
+                    st.rerun()
+        else:
+            st.caption("尚無已綁定群組")
+
+        # 手動新增
+        st.markdown("#### ➕ 手動新增對應")
+        col_gid, col_store = st.columns([2, 2])
+        new_gid = col_gid.text_input(
+            "Line 群組 ID (C 開頭)",
+            key="edge_new_gid",
+            placeholder="C1234567890abcdef...",
+        )
+        if _sl_groups:
+            new_store = col_store.selectbox(
+                "對應門店",
+                _sl_groups,
+                key="edge_new_store",
+            )
+        else:
+            new_store = col_store.text_input(
+                "對應門店名稱",
+                key="edge_new_store_txt",
+                placeholder="請先至門店管理新增門店",
+                disabled=True,
+            )
+            new_store = ""
+        if st.button("新增綁定", use_container_width=False, key="edge_add_group"):
+            if new_gid.strip() and new_store:
+                edge_store.upsert_line_group(new_gid.strip(), new_store)
+                st.success(f"✅ {new_gid[:20]}... → {new_store}")
+                st.rerun()
+            elif not new_gid.strip():
+                st.warning("請輸入群組 ID")
+            else:
+                st.warning("請先至「🏪 門店管理」新增門店")
+
+    # ──────────────────────────────────────────────────────────────
+    # Tab 6：開發者工具
+    # ──────────────────────────────────────────────────────────────
+    with tab_dev:
+        st.markdown("#### 🧪 開發者工具")
+        st.caption("測試、模擬、壓力測試與維護工具（正式環境請謹慎使用）。")
+
+        with st.expander("🤖 Webhook 模擬器", expanded=True):
+            _dev_sl = get_store_list()
+            _dev_fallback = ["崇德店", "美村店", "公益店", "北屯店", "南屯店"]
+            _dev_pool = _dev_sl if _dev_sl else _dev_fallback
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("📨 隨機模擬 Webhook", use_container_width=True, key="dev_sim_random"):
+                    tmpl    = random.choice(_WEBHOOK_TEMPLATES)
+                    store   = random.choice(_dev_pool)
+                    content = tmpl["content"].format(store=store)
+                    result  = process_webhook(content, user=tmpl["user"], store=store)
+                    st.session_state.edge_webhook_result = result
+                    st.rerun()
+
+            custom_msg = st.text_input(
+                "自訂模擬訊息",
+                key="dev_webhook_custom",
+                placeholder="例：崇德店 POS 故障",
+            )
+            with col_b:
+                if st.button(
+                    "📤 送出自訂訊息", use_container_width=True,
+                    key="dev_sim_custom",
+                    disabled=not custom_msg.strip(),
+                ):
+                    result = process_webhook(custom_msg.strip())
+                    st.session_state.edge_webhook_result = result
+                    st.rerun()
+
+            r = st.session_state.get("edge_webhook_result")
+            if r:
+                if r["type"] == "new":
+                    st.success(
+                        f"✅ 新事件 #{r['id']}（{_LEVEL_LABELS.get(r['level'], r['level'])}）\n"
+                        f"{r['content'][:40]}"
+                    )
+                elif r["type"] == "merged":
+                    st.info(f"🔗 已合併至事件 #{r['merge_id']}\n{r['content'][:40]}")
+                else:
+                    ac = r.get("auto_closed")
+                    if ac:
+                        st.success(f"✅ 確認語意，已自動結案 {ac} 筆 monitoring 事件")
+                    else:
+                        st.info(f"🔍 確認語意，無 monitoring 事件可結案\n{r['content'][:40]}")
+
+        with st.expander("🔥 壓力測試", expanded=False):
+            st.caption("一次生成 20 筆隨機事件，測試看板與 manager_weights 學習")
+            if st.button("🔥 壓力測試 (20筆)", use_container_width=True,
+                         key="dev_stress_btn", type="secondary"):
+                _dev_sl2 = get_store_list()
+                _dev_pool2 = _dev_sl2 if _dev_sl2 else _dev_fallback
+                with st.spinner("壓力測試中..."):
+                    for i in range(20):
+                        tmpl    = random.choice(_WEBHOOK_TEMPLATES)
+                        store   = random.choice(_dev_pool2)
+                        content = tmpl["content"].format(store=store)
+                        unique_user = f"壓測_{i:02d}_{random.randint(100,999)}"
+                        process_webhook(content, user=unique_user, store=store)
+                st.session_state.edge_webhook_result = None
+                st.success("✅ 壓力測試完成：20 筆事件已生成！")
+                st.rerun()
+
+        with st.expander("📋 報告 & 日誌", expanded=False):
+            b1, b2 = st.columns(2)
+            if b1.button("📋 立即產生戰報", use_container_width=True,
+                         type="primary", key="dev_report_btn"):
+                st.session_state.edge_show_report = True
+                st.rerun()
+            if b2.button("📖 責任地圖 & 決策日誌", key="dev_learning_btn", use_container_width=True):
+                st.session_state.edge_show_learning = True
+                st.rerun()
 
 
 # ================================================================
@@ -1594,8 +1823,8 @@ def main():
 <div class="main-header">
     <h1 style="margin:0;">🛡️ 嗑肉數位總部</h1>
     <p style="margin:5px 0 0 0;opacity:0.9;">
-        Line 邊緣代理人 v6.0 · 智能儀表板 · 三色看板 · 戰報中心 · 系統設定<br>
-        <small>Sidebar 導覽 · 門店管理 · Claude AI API · 跑馬燈告警 · AI 智能概況</small>
+        Line 邊緣代理人 v6.1 · 智能儀表板 · 三色看板 · 戰報中心 · 系統設定<br>
+        <small>Claude AI 修正 · 門店自訂 · 設定 Tabs · 狀態總覽 · 批次匯入</small>
     </p>
 </div>
 """, unsafe_allow_html=True)
