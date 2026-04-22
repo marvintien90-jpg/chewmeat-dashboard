@@ -251,10 +251,12 @@ def show_portal():
         default_display = [DISPLAY_NAMES[p] for p in ALL_PAGES if p in enabled]
         is_admin_user = st.session_state.get("is_admin", False)
         if is_admin_user:
+            # 若 session state 尚未設定（例如頁面重整後仍登入），以 enabled_pages 初始化
+            if "sidebar_pages_multiselect" not in st.session_state:
+                st.session_state["sidebar_pages_multiselect"] = default_display
             selected_display = st.multiselect(
                 "選擇本次開放的功能模組",
                 options=all_display,
-                default=default_display,
                 label_visibility="collapsed",
                 key="sidebar_pages_multiselect",
             )
