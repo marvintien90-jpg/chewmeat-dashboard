@@ -322,6 +322,7 @@ def process_pending_webhooks() -> int:
                     "content":     text,
                     "status":      "pending",
                     "keyword_cat": keyword_cat,
+                    "group_id":    group_id,  # v4
                 })
 
         edge_store.mark_webhook_processed(wh["id"])
@@ -400,6 +401,44 @@ def run_daily_maintenance() -> None:
             f"🗂️ 日常維護：歸檔 {archived} 筆舊事件、清理 {cleaned} 筆 Webhook 緩存",
             icon="🧹"
         )
+
+
+# ================================================================
+# v4：定時戰報推播（17:00 / 19:00 → 總指揮個人 Line）
+# ================================================================
+def check_scheduled_report_push() -> None:
+    """
+    每日 17:00 / 19:00 自動推播戰報至總指揮個人 Line ID。
+    以 SQLite settings 表記錄「今日已推播」，防止頁面重整重複發送。
+    前提：LINE_COMMANDER_USER_ID 已在 Secrets 設定。
+    """
+    if not _HAS_LINE_UTILS:
+        return
+    commander_id = _line_utils.get_commander_user_id()
+    if not commander_id:
+        return
+
+    now   = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+
+    for push_hour in [17, 19]:
+        # 10 分鐘窗口（:00 ~ :09）內觸發
+        if now.hour == push_hour and now.minute < 10:
+            setting_key = f"report_pushed_{today}_{push_hour}h"
+            if not edge_store.get_setting(setting_key):
+                try:
+                    report  = generate_battle_report()
+                    success = _line_utils.push_message(commander_id, report)
+                    if success:
+                        edge_store.set_setting(setting_key, now.isoformat())
+                        st.toast(
+                            f"📱 {push_hour}:00 戰報已推播至總指揮 Line",
+                            icon="📊"
+                        )
+                    else:
+                        st.toast("⚠️ 戰報推播失敗，請確認 LINE_CHANNEL_ACCESS_TOKEN", icon="❌")
+                except Exception as e:
+                    st.toast(f"戰報推播異常：{e}", icon="❌")
 
 
 # ================================================================
@@ -597,6 +636,13 @@ def show_decision_sandbox(item: dict):
         key=f"draft_{item['id']}"
     )
 
+    # ── v4：群組回傳資訊 ─────────────────────────────────────────
+    group_id = item.get("group_id", "")
+    if group_id and _HAS_LINE_UTILS:
+        st.caption(f"📡 來源群組：`{group_id[:20]}...` — 核准後將自動推播回此群組")
+    elif not group_id:
+        st.caption("⚠️ 此事件無群組 ID（來自模擬器），核准後不會推播至 Line")
+
     c1, c2 = st.columns(2)
     with c1:
         if st.button(
@@ -620,12 +666,34 @@ def show_decision_sandbox(item: dict):
                 draft_modified=(edited != raw_draft),
                 keyword_cat=keyword_cat,
             )
-            st.success(
-                f"✅ 指令已發送至 Line 群組！\n\n"
-                f"🕒 4H 時效追蹤已啟動\n"
-                f"👀 24H 觀察期已啟動\n"
-                f"📊 決策紀錄已寫入責任地圖"
-            )
+
+            # ── v4：逆向回傳指令至 Line 群組 ────────────────────
+            push_ok = False
+            if group_id and _HAS_LINE_UTILS:
+                # 整理訊息：移除過長的 Streamlit 格式，保留 Line 可讀文字
+                line_msg = edited.strip()
+                push_ok  = _line_utils.push_message(group_id, line_msg)
+
+            if push_ok:
+                st.success(
+                    f"✅ 指令已推播至 Line 群組！\n\n"
+                    f"🕒 4H 時效追蹤已啟動\n"
+                    f"👀 24H 觀察期已啟動\n"
+                    f"📊 決策紀錄已寫入責任地圖"
+                )
+            elif group_id:
+                st.warning(
+                    f"⚠️ Line 推播失敗（請確認 LINE_CHANNEL_ACCESS_TOKEN 已設定）\n\n"
+                    f"✅ 資料庫狀態已更新為 MONITORING"
+                )
+            else:
+                st.success(
+                    f"✅ 決策已記錄（模擬模式，無 Line 推播）\n\n"
+                    f"🕒 4H 時效追蹤已啟動\n"
+                    f"👀 24H 觀察期已啟動\n"
+                    f"📊 決策紀錄已寫入責任地圖"
+                )
+
             st.balloons()
             st.rerun()
     with c2:
@@ -934,8 +1002,34 @@ def render_sidebar():
         else:
             st.caption("⚪ requests 未安裝（僅限模擬模式）")
 
+        # ── 未辨識群組（v4 新增）─────────────────────────────────
+        unrecognized = edge_store.get_unrecognized_groups()
+        if unrecognized:
+            with st.expander(
+                f"🔍 未辨識群組 ({len(unrecognized)}) — 點擊快速綁定",
+                expanded=True
+            ):
+                st.caption("以下群組傳來訊息但尚未綁定門店，請快速綁定以啟動分類。")
+                for g in unrecognized:
+                    gid_short = g["group_id"][:16] + "..."
+                    st.markdown(f"**`{gid_short}`**")
+                    st.caption(
+                        f"訊息數：{g['msg_count']} · 最後：{g['last_seen'][:16]}"
+                    )
+                    cb_col, btn_col = st.columns([3, 1])
+                    quick_store = cb_col.selectbox(
+                        "門店", ["(略過)"] + STORE_LIST,
+                        key=f"quick_{g['group_id']}"
+                    )
+                    if btn_col.button("綁定", key=f"qbind_{g['group_id']}",
+                                      disabled=(quick_store == "(略過)")):
+                        edge_store.upsert_line_group(g["group_id"], quick_store)
+                        st.toast(f"✅ {gid_short} → {quick_store}")
+                        st.rerun()
+                    st.divider()
+
         # ── 群組→門店對應管理 ────────────────────────────────────
-        with st.expander("🔗 群組→門店對應設定", expanded=False):
+        with st.expander("🔗 已綁定群組設定", expanded=False):
             groups = edge_store.load_line_groups()
             if groups:
                 for g in groups:
@@ -948,7 +1042,7 @@ def render_sidebar():
             else:
                 st.caption("尚無對應設定")
 
-            st.markdown("**➕ 新增對應**")
+            st.markdown("**➕ 手動新增對應**")
             new_gid   = st.text_input("Line 群組 ID (C 開頭)", key="edge_new_gid",
                                        placeholder="C1234567890abcdef...")
             new_store = st.selectbox("對應門店", STORE_LIST, key="edge_new_store")
@@ -959,6 +1053,18 @@ def render_sidebar():
                     st.rerun()
                 else:
                     st.warning("請輸入群組 ID")
+
+        # ── 定時戰報推播狀態（v4 新增）──────────────────────────
+        if _HAS_LINE_UTILS:
+            commander_id = _line_utils.get_commander_user_id()
+            if commander_id:
+                st.markdown("**📅 今日戰報推播**")
+                today = datetime.now().strftime("%Y-%m-%d")
+                for h in [17, 19]:
+                    pushed = edge_store.get_setting(f"report_pushed_{today}_{h}h")
+                    icon   = "✅" if pushed else "⏳"
+                    time_s = pushed[:16] if pushed else f"{h}:00 待推播"
+                    st.caption(f"{icon} {h}:00 戰報 → {time_s}")
 
         st.divider()
         st.page_link("app.py", label="← 返回總部大門")
@@ -1109,6 +1215,9 @@ def main():
     # v3：自動化背景程序
     run_auto_closure_check()   # 每 5 分鐘：智能結案監聽器
     run_daily_maintenance()    # 每 24 小時：數據清理 & 歸檔
+
+    # v4：定時戰報私訊推送（17:00 / 19:00）
+    check_scheduled_report_push()
 
     render_sidebar()
     render_main_dashboard()

@@ -100,17 +100,24 @@ def init_db() -> None:
             created_at  TEXT    NOT NULL,
             updated_at  TEXT    NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key        TEXT    PRIMARY KEY,
+            value      TEXT    NOT NULL,
+            updated_at TEXT    NOT NULL
+        );
         """)
-    # v3 欄位 Migration（idempotent）
+    # v3/v4 欄位 Migration（idempotent）
     _migrate_v3()
 
 
 def _migrate_v3() -> None:
-    """v3 新增欄位：image_url / auto_closed_at / close_note（冪等）"""
+    """v3/v4 新增欄位（idempotent）：image_url / auto_closed_at / close_note / group_id"""
     new_cols = [
         ("image_url",      "TEXT DEFAULT ''"),
         ("auto_closed_at", "TEXT"),
         ("close_note",     "TEXT DEFAULT ''"),
+        ("group_id",       "TEXT DEFAULT ''"),   # v4：追蹤來源 Line 群組 ID，支援逆向回傳
     ]
     with _conn() as db:
         existing = {row[1] for row in db.execute("PRAGMA table_info(events)").fetchall()}
@@ -173,19 +180,20 @@ def count_events() -> int:
 
 
 def save_event(evt: dict) -> int:
-    """儲存一筆事件，回傳新 ID"""
+    """儲存一筆事件，回傳新 ID。v4 新增 group_id 欄位支援逆向回傳。"""
     row = _evt_to_row(evt)
     with _conn() as db:
         cur = db.execute(
             """INSERT INTO events
                (level, store, user_alias, content, created_at, status,
-                assigned_to, response_deadline, monitoring_until, group_key, keyword_cat)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                assigned_to, response_deadline, monitoring_until,
+                group_key, keyword_cat, group_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (row["level"], row["store"], row["user_alias"], row["content"],
              row["created_at"], row.get("status", "pending"),
              row.get("assigned_to"), row.get("response_deadline"),
              row.get("monitoring_until"), row.get("group_key", ""),
-             row.get("keyword_cat", ""))
+             row.get("keyword_cat", ""), row.get("group_id", ""))
         )
         return cur.lastrowid
 
@@ -527,3 +535,46 @@ def delete_line_group(group_id: str) -> None:
     """刪除指定群組對應"""
     with _conn() as db:
         db.execute("DELETE FROM line_groups WHERE group_id=?", (group_id,))
+
+
+def get_unrecognized_groups() -> list[dict]:
+    """
+    回傳 webhook_cache 中有訊息、但尚未在 line_groups 中綁定門店的群組。
+    用於「未辨識群組快速綁定」UI。
+    回傳欄位：group_id, msg_count, last_seen
+    """
+    with _conn() as db:
+        rows = db.execute(
+            """SELECT group_id,
+                      COUNT(*)          AS msg_count,
+                      MAX(received_at)  AS last_seen
+               FROM webhook_cache
+               WHERE group_id != ''
+               AND group_id NOT IN (SELECT group_id FROM line_groups)
+               GROUP BY group_id
+               ORDER BY last_seen DESC""",
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Settings（系統設定 / 推播去重）────────────────────────────────
+def get_setting(key: str) -> Optional[str]:
+    """取得系統設定值，不存在則回傳 None"""
+    with _conn() as db:
+        row = db.execute(
+            "SELECT value FROM settings WHERE key=?", (key,)
+        ).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(key: str, value: str) -> None:
+    """儲存系統設定值（UPSERT）"""
+    now = datetime.now().isoformat()
+    with _conn() as db:
+        db.execute(
+            """INSERT INTO settings (key, value, updated_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(key)
+               DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+            (key, value, now)
+        )

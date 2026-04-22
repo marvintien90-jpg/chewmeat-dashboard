@@ -49,6 +49,16 @@ def get_channel_access_token() -> str:
     return _get_secret("LINE_CHANNEL_ACCESS_TOKEN")
 
 
+def get_commander_user_id() -> str:
+    """
+    總指揮的個人 Line userId（U 開頭，32 碼）。
+    用於每日 17:00 / 19:00 戰報私訊推送。
+    在 .streamlit/secrets.toml 設定：LINE_COMMANDER_USER_ID = "Uxxxxxxxxx"
+    取得方式：在 Bot 與指揮官的對話中，webhook 事件 source.userId 即為此 ID。
+    """
+    return _get_secret("LINE_COMMANDER_USER_ID")
+
+
 def get_group_store_map() -> dict[str, str]:
     """
     解析 LINE_GROUP_STORE_MAP（JSON 字串）。

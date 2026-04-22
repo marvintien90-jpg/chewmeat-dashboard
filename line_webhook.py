@@ -215,7 +215,7 @@ def _handle_event(event: dict) -> Optional[dict]:
 
         return {"type": "merged", "merge_id": merge_id, "level": level}
 
-    # ── 7. 儲存新事件 ────────────────────────────────────────────
+    # ── 7. 儲存新事件（v4 加入 group_id 支援逆向回傳）──────────
     new_id = edge_store.save_event({
         "level":       level,
         "store":       store,
@@ -223,6 +223,7 @@ def _handle_event(event: dict) -> Optional[dict]:
         "content":     text,
         "status":      "pending",
         "keyword_cat": keyword_cat,
+        "group_id":    group_id,     # v4：記錄來源群組，核准時逆向推播用
     })
     edge_store.mark_webhook_processed(wh_id)
     logger.info(f"New event #{new_id} [{level}/{keyword_cat}] {store}: {text[:40]}")
