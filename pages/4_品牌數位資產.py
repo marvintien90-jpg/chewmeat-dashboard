@@ -183,14 +183,25 @@ with st.sidebar:
         # ── Google 評分動態資產設定 ──────────────────
         st.markdown("**⭐ Google 評分來源設定**")
 
-        # API key status display
+        # API key status display (checks env → st.secrets → Layer5 fallback)
         import os as _os
         _has_places = bool(_os.environ.get("GOOGLE_PLACES_API_KEY", ""))
         _has_serp   = bool(_os.environ.get("SERPAPI_KEY", ""))
-        st.caption(
-            f"{'🟢' if _has_places else '⚪'} Google Places API {'已啟用' if _has_places else '未設定'} ｜ "
-            f"{'🟢' if _has_serp else '⚪'} SerpApi {'已啟用' if _has_serp else '未設定'}"
-        )
+        try:
+            if not _has_places: _has_places = bool(st.secrets.get("GOOGLE_PLACES_API_KEY", ""))
+            if not _has_serp:   _has_serp   = bool(st.secrets.get("SERPAPI_KEY", ""))
+        except Exception:
+            pass
+        # Show active rating source — Layer 5 scraping is always available when bs4 is installed
+        if _has_places:
+            _rating_src = "🟢 Google Places API (官方啟用)"
+        elif _has_serp:
+            _rating_src = "🟢 SerpApi (代理啟用)"
+        elif HAS_BS4:
+            _rating_src = "🟢 Google評分爬蟲備援 (Layer 5 啟動)"
+        else:
+            _rating_src = "⚪ Google評分不可用（bs4 未安裝）"
+        st.caption(_rating_src)
 
         # Layer 1: Place IDs
         with st.expander("🗺️ Layer 1 — Google Place IDs（最精準）", expanded=bool(cfg.get("place_ids"))):
@@ -270,11 +281,32 @@ with st.sidebar:
     st.caption(f"{'✅' if HAS_PYTRENDS else '⚠️'} pytrends {'已安裝' if HAS_PYTRENDS else '未安裝'}")
     st.caption(f"{'✅' if HAS_BS4 else '⚠️'} beautifulsoup4 {'已安裝' if HAS_BS4 else '未安裝'}")
     import os as _os2
-    _has_places2 = bool(_os2.environ.get("GOOGLE_PLACES_API_KEY", ""))
-    _has_serp2   = bool(_os2.environ.get("SERPAPI_KEY", ""))
+    _has_places2    = bool(_os2.environ.get("GOOGLE_PLACES_API_KEY", ""))
+    _has_serp2      = bool(_os2.environ.get("SERPAPI_KEY", ""))
     _has_anthropic2 = bool(_os2.environ.get("ANTHROPIC_API_KEY", ""))
-    st.caption(f"{'🟢' if _has_places2 else '⚪'} Google Places API")
-    st.caption(f"{'🟢' if _has_serp2 else '⚪'} SerpApi")
+    # Also check st.secrets (top-level secrets are env vars on Cloud, double-check locally)
+    try:
+        if not _has_places2:    _has_places2    = bool(st.secrets.get("GOOGLE_PLACES_API_KEY", ""))
+        if not _has_serp2:      _has_serp2      = bool(st.secrets.get("SERPAPI_KEY", ""))
+        if not _has_anthropic2: _has_anthropic2 = bool(st.secrets.get("ANTHROPIC_API_KEY", ""))
+    except Exception:
+        pass
+    # Google 評分資料來源（優先官方API → SerpApi → Layer5爬蟲備援）
+    if _has_places2:
+        st.caption("🟢 Google Places API")
+    elif _has_serp2:
+        st.caption("🟢 SerpApi")
+    elif HAS_BS4:
+        st.caption("🟢 Google評分爬蟲")
+    else:
+        st.caption("⚪ Google評分")
+    # 網路聲量爬蟲（SerpApi 或 bs4 備援）
+    if _has_serp2:
+        st.caption("🟢 SerpApi 聲量爬蟲")
+    elif HAS_BS4:
+        st.caption("🟢 網路聲量爬蟲")
+    else:
+        st.caption("⚪ 聲量爬蟲")
     st.caption(f"{'🟢' if _has_anthropic2 else '⚪'} Claude AI")
 
 # Re-load config

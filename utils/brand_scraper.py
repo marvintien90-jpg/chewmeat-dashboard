@@ -398,6 +398,11 @@ def get_brand_google_rating(
 
     # ── Layer 1: Google Places API ───────────────
     places_key = os.environ.get("GOOGLE_PLACES_API_KEY", "").strip()
+    if not places_key:
+        try:
+            places_key = st.secrets.get("GOOGLE_PLACES_API_KEY", "") or ""
+        except Exception:
+            pass
     if places_key and place_ids:
         res = _get_rating_via_places_api(list(place_ids), places_key)
         if res:
@@ -405,6 +410,11 @@ def get_brand_google_rating(
 
     # ── Layer 2: SerpApi ─────────────────────────
     serp_key = os.environ.get("SERPAPI_KEY", "").strip()
+    if not serp_key:
+        try:
+            serp_key = st.secrets.get("SERPAPI_KEY", "") or ""
+        except Exception:
+            pass
     if serp_key:
         res = _get_rating_via_serpapi(brand_name, serp_key)
         if res:
