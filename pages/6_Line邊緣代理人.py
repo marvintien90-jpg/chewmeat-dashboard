@@ -1274,8 +1274,9 @@ def render_tab_settings():
             disabled=not confirm_clear,
         ):
             try:
-                from utils.edge_store import _conn
-                with _conn() as con:
+                import sqlite3
+                db_path = os.environ.get("EDGE_DB_PATH", "/tmp/edge_agent.db")
+                with sqlite3.connect(db_path) as con:
                     con.execute("DELETE FROM events")
                     con.execute("DELETE FROM webhook_cache")
                 st.session_state.edge_seeded = False
