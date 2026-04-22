@@ -1,15 +1,16 @@
 """
 utils/edge_store.py
-Edge Agent 數據存儲層 — SQLite 後台 (v2.0)
+Edge Agent 數據存儲層 — SQLite 後台 (v3.0)
 
 Streamlit Cloud 使用 /tmp 路徑（重啟後清空，適合 Demo）。
 本地開發可設定環境變數 EDGE_DB_PATH 指向永久路徑。
 
 資料表：
-  events          — 事件主表
+  events          — 事件主表（v3 新增 image_url / auto_closed_at / close_note）
   decision_logs   — 每次核准決策的記錄
   manager_weights — 主管責任偏好權重（3+ 次自動升為預設）
   webhook_cache   — Line Webhook 原始訊息暫存
+  archive_events  — 超過 30 天事件歸檔表（v3 新增）
 """
 from __future__ import annotations
 import sqlite3, os
@@ -74,7 +75,43 @@ def init_db() -> None:
             received_at  TEXT    NOT NULL,
             processed    INTEGER DEFAULT 0
         );
+
+        CREATE TABLE IF NOT EXISTS archive_events (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            orig_id        INTEGER,
+            level          TEXT,
+            store          TEXT,
+            user_alias     TEXT,
+            content        TEXT,
+            created_at     TEXT,
+            status         TEXT,
+            assigned_to    TEXT,
+            keyword_cat    TEXT    DEFAULT '',
+            image_url      TEXT    DEFAULT '',
+            auto_closed_at TEXT,
+            close_note     TEXT    DEFAULT '',
+            archived_at    TEXT    NOT NULL
+        );
         """)
+    # v3 欄位 Migration（idempotent）
+    _migrate_v3()
+
+
+def _migrate_v3() -> None:
+    """v3 新增欄位：image_url / auto_closed_at / close_note（冪等）"""
+    new_cols = [
+        ("image_url",      "TEXT DEFAULT ''"),
+        ("auto_closed_at", "TEXT"),
+        ("close_note",     "TEXT DEFAULT ''"),
+    ]
+    with _conn() as db:
+        existing = {row[1] for row in db.execute("PRAGMA table_info(events)").fetchall()}
+        for col_name, col_def in new_cols:
+            if col_name not in existing:
+                try:
+                    db.execute(f"ALTER TABLE events ADD COLUMN {col_name} {col_def}")
+                except Exception:
+                    pass  # 已存在時 SQLite 不支援 IF NOT EXISTS，吞掉即可
 
 
 # ── 型別轉換工具 ──────────────────────────────────────────────────
@@ -109,6 +146,7 @@ def _evt_from_row(row: dict) -> dict:
     evt["monitoring_until"]  = _dt(evt.get("monitoring_until"))
     # backward-compat：其他模組用 item["user"]
     evt["user"] = evt.get("user_alias", "")
+    # v3 欄位保持原始字串或 None（頁面端自行解析）
     return evt
 
 
@@ -148,7 +186,6 @@ def update_event(event_id: int, **kwargs) -> None:
     """動態更新事件欄位，支援 datetime 自動轉 ISO 字串"""
     if not kwargs:
         return
-    # 轉換 datetime 值
     sanitized = {k: (_iso(v) if isinstance(v, datetime) else v) for k, v in kwargs.items()}
     sets = ", ".join(f"{k}=?" for k in sanitized)
     vals = list(sanitized.values()) + [event_id]
@@ -166,6 +203,124 @@ def auto_close_expired() -> int:
                AND monitoring_until IS NOT NULL
                AND monitoring_until <= ?""",
             (now_str,)
+        )
+        return cur.rowcount
+
+
+# ── v3：智能結案監聽器 ────────────────────────────────────────────
+def auto_close_by_silence(silence_minutes: int = 5) -> int:
+    """
+    掃描 pending 的藍色事件，若建立時間 > silence_minutes 分鐘前
+    且仍為 pending，視為「靜默期滿」自動結案。
+    回傳自動結案筆數。
+    """
+    cutoff  = (datetime.now() - timedelta(minutes=silence_minutes)).isoformat()
+    now_str = datetime.now().isoformat()
+    with _conn() as db:
+        cur = db.execute(
+            """UPDATE events
+               SET status='closed', auto_closed_at=?, close_note='AI 靜默期自動結案'
+               WHERE level='blue' AND status='pending' AND created_at <= ?""",
+            (now_str, cutoff)
+        )
+        return cur.rowcount
+
+
+def auto_close_confirmation_for_store(store: str) -> int:
+    """
+    當收到確認語意訊息時，自動結案該門店最近一筆 monitoring 事件。
+    回傳關閉筆數（0 或 1）。
+    """
+    now_str = datetime.now().isoformat()
+    with _conn() as db:
+        row = db.execute(
+            """SELECT id FROM events
+               WHERE store=? AND status='monitoring'
+               ORDER BY created_at DESC LIMIT 1""",
+            (store,)
+        ).fetchone()
+        if row:
+            db.execute(
+                """UPDATE events
+                   SET status='closed', auto_closed_at=?, close_note='確認語意自動結案'
+                   WHERE id=?""",
+                (now_str, row["id"])
+            )
+            return 1
+    return 0
+
+
+# ── v3：多模態辨識接口預留 ────────────────────────────────────────
+def analyze_completion_photo(image_url: str, event_context: dict) -> dict:
+    """
+    完工照片多模態辨識接口（預留）。
+    目前回傳佔位結果；未來可接入 Claude Vision / Google Vision API。
+
+    Args:
+        image_url:      完工照片 URL
+        event_context:  事件 dict（含 id, level, store, content）
+
+    Returns:
+        dict with keys: analyzed, reason, image_url, event_id
+    """
+    return {
+        "analyzed":  False,
+        "reason":    "多模態辨識接口預留，尚未啟用（Vision API 整合規劃中）",
+        "image_url": image_url,
+        "event_id":  event_context.get("id"),
+    }
+
+
+# ── v3：數據清理 ──────────────────────────────────────────────────
+def auto_archive_old_events(days: int = 30) -> int:
+    """
+    將超過 N 天的已結案 / 觀察中事件搬移至 archive_events 資料表。
+    回傳搬移筆數。
+    """
+    cutoff      = (datetime.now() - timedelta(days=days)).isoformat()
+    archived_at = datetime.now().isoformat()
+
+    with _conn() as db:
+        rows = db.execute(
+            """SELECT * FROM events
+               WHERE status IN ('closed', 'monitoring') AND created_at <= ?""",
+            (cutoff,)
+        ).fetchall()
+
+        if not rows:
+            return 0
+
+        for r in rows:
+            r = dict(r)
+            db.execute(
+                """INSERT INTO archive_events
+                   (orig_id, level, store, user_alias, content, created_at,
+                    status, assigned_to, keyword_cat, image_url,
+                    auto_closed_at, close_note, archived_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    r["id"], r["level"], r["store"], r["user_alias"],
+                    r["content"], r["created_at"], r["status"],
+                    r.get("assigned_to"), r.get("keyword_cat", ""),
+                    r.get("image_url", ""), r.get("auto_closed_at"),
+                    r.get("close_note", ""), archived_at,
+                )
+            )
+
+        ids = [dict(r)["id"] for r in rows]
+        placeholders = ",".join("?" * len(ids))
+        db.execute(f"DELETE FROM events WHERE id IN ({placeholders})", ids)
+
+        return len(ids)
+
+
+def cleanup_old_webhooks(days: int = 7) -> int:
+    """刪除超過 N 天的已處理 Webhook 緩存，回傳刪除筆數"""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with _conn() as db:
+        cur = db.execute(
+            "DELETE FROM webhook_cache WHERE processed=1 AND received_at <= ?",
+            (cutoff,)
         )
         return cur.rowcount
 
@@ -226,14 +381,12 @@ def log_decision(event_id: int, level: str, store: str,
     now  = datetime.now().isoformat()
     cat  = keyword_cat or level
     with _conn() as db:
-        # 寫入決策日誌
         db.execute(
             """INSERT INTO decision_logs
                (ts, event_id, level, store, assigned_to, draft_modified, keyword_cat)
                VALUES (?,?,?,?,?,?,?)""",
             (now, event_id, level, store, assigned_to, int(draft_modified), cat)
         )
-        # Upsert 主管權重
         db.execute(
             """INSERT INTO manager_weights (manager, category, cnt, is_default, updated_at)
                VALUES (?, ?, 1, 0, ?)
@@ -241,7 +394,6 @@ def log_decision(event_id: int, level: str, store: str,
                DO UPDATE SET cnt=cnt+1, updated_at=excluded.updated_at""",
             (assigned_to, cat, now)
         )
-        # 滿 3 次自動升級為預設建議
         db.execute(
             """UPDATE manager_weights SET is_default=1
                WHERE manager=? AND category=? AND cnt >= 3""",
@@ -258,7 +410,6 @@ def get_recommended_manager(level: str, keyword_cat: str = "") -> Optional[str]:
     """
     cat = keyword_cat or level
     with _conn() as db:
-        # P1: 精確 category 的 default
         row = db.execute(
             """SELECT manager FROM manager_weights
                WHERE category=? AND is_default=1
@@ -267,7 +418,6 @@ def get_recommended_manager(level: str, keyword_cat: str = "") -> Optional[str]:
         ).fetchone()
         if row:
             return row["manager"]
-        # P2: 相同 level prefix 最高 cnt
         row = db.execute(
             """SELECT manager FROM manager_weights
                WHERE category LIKE ? ORDER BY cnt DESC LIMIT 1""",

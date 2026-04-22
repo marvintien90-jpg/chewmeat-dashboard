@@ -1,7 +1,7 @@
 """
-6_Line邊緣代理人.py — v2.0
+6_Line邊緣代理人.py — v3.0
 嗑肉數位總部：分身參謀全景看板
-新增：SQLite 數據橋接 / 語意腦強化 / 責任地圖學習 / Webhook 模擬器 / 戰報排程
+v3 新增：智能結案監聽器 / 多模態預留 / AI 戰略點評 / 數據清理 / 壓力測試
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -91,6 +91,19 @@ st.markdown("""
     border-radius: 10px; background: rgba(230,59,31,0.12);
     color: #E63B1F; font-weight: 600; margin-left: 6px;
 }
+.ai-close-label {
+    font-size: 11px; color: #27AE60; font-weight: 600;
+    margin-top: 4px; padding: 2px 8px;
+    background: rgba(39,174,96,0.1); border-radius: 6px;
+    display: inline-block;
+}
+.ai-commentary {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-left: 4px solid #00D4FF; border-radius: 10px;
+    padding: 16px 20px; color: #e0f0ff;
+    font-size: 0.92rem; line-height: 1.8;
+    margin: 10px 0;
+}
 #MainMenu { visibility: hidden; }
 footer    { visibility: hidden; }
 </style>
@@ -111,13 +124,12 @@ MANAGER_LIST = ["張主管", "李主管", "王主管", "陳主管", "林主管"]
 # ================================================================
 # 增強 NLP v2 — 關鍵字分類 + 語意終點判定
 # ================================================================
-# 三色關鍵字庫（含子類別，支援責任地圖學習）
 _RED_CATS: dict[str, list[str]] = {
-    "red-equipment": ["故障", "壞了", "不動了", "無法運作", "無法結帳", "死機", "當機"],
+    "red-equipment":   ["故障", "壞了", "不動了", "無法運作", "無法結帳", "死機", "當機"],
     "red-temperature": ["溫度異常", "冷藏", "冷凍異常", "溫控"],
-    "red-power": ["斷電", "停電", "電源故障", "跳電"],
-    "red-safety": ["漏水", "火警", "受傷", "危險"],
-    "red-other": ["異常", "停擺", "報廢", "緊急", "無法"],
+    "red-power":       ["斷電", "停電", "電源故障", "跳電"],
+    "red-safety":      ["漏水", "火警", "受傷", "危險"],
+    "red-other":       ["異常", "停擺", "報廢", "緊急", "無法"],
 }
 _YELLOW_CATS: dict[str, list[str]] = {
     "yellow-staffing": ["支援", "人手不足", "工讀生", "人力", "幫忙"],
@@ -126,11 +138,10 @@ _YELLOW_CATS: dict[str, list[str]] = {
 }
 _BLUE_CATS: dict[str, list[str]] = {
     "blue-inventory": ["盤點", "庫存不足", "補貨", "包材"],
-    "blue-task": ["結帳", "清潔", "任務", "完成", "派發"],
-    "blue-report": ["回報", "等待", "總部"],
+    "blue-task":      ["結帳", "清潔", "任務", "完成", "派發"],
+    "blue-report":    ["回報", "等待", "總部"],
 }
 
-# 擴充確認語意（模糊結案辨識）
 _CONFIRM_PATTERNS = [
     r"收到", r"搞定", r"ok了?", r"好了", r"處理完了?", r"完成了?",
     r"確認", r"好的", r"沒問題", r"已處理", r"結案了?", r"送達",
@@ -150,10 +161,7 @@ _CAT_CN: dict[str, str] = {
 
 
 def classify_v2(text: str) -> tuple[str, str]:
-    """
-    增強分類器 v2
-    回傳 (level, keyword_cat)
-    """
+    """增強分類器 v2，回傳 (level, keyword_cat)"""
     t = text or ""
     for cat, kws in _RED_CATS.items():
         if any(kw in t for kw in kws):
@@ -178,12 +186,14 @@ def is_confirmation(text: str) -> bool:
 # ================================================================
 def _edge_init():
     defaults = {
-        "edge_show_report":   False,
-        "edge_show_learning": False,
-        "edge_show_closed":   False,
-        "edge_last_scan":     datetime.now(),
-        "edge_seeded":        False,
-        "edge_webhook_result": None,
+        "edge_show_report":      False,
+        "edge_show_learning":    False,
+        "edge_show_closed":      False,
+        "edge_last_scan":        datetime.now(),
+        "edge_seeded":           False,
+        "edge_webhook_result":   None,
+        "edge_last_auto_check":  None,   # v3：智能結案監聽器
+        "edge_last_maintenance": None,   # v3：日常維護
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -252,10 +262,9 @@ def process_webhook(content: str, user: str = "模擬用戶",
     """
     處理一則 Webhook 訊息：
     1. 緩存原始訊息
-    2. 判斷是否為確認訊息（觸發結案）
+    2. 判斷是否為確認訊息（v3：觸發門店 monitoring 事件自動結案）
     3. 分類並檢查 5 分鐘合併窗口
     4. 儲存新事件或合併
-    回傳處理結果 dict
     """
     if not store:
         store = random.choice(STORE_LIST)
@@ -263,10 +272,16 @@ def process_webhook(content: str, user: str = "模擬用戶",
     # 1. 緩存
     wh_id = edge_store.cache_webhook(content, "sim_user", "sim_group")
 
-    # 2. 確認語意 → 嘗試關閉 monitoring 事件
+    # 2. 確認語意 → v3：自動結案該門店 monitoring 事件
     if is_confirmation(content):
+        closed_n = edge_store.auto_close_confirmation_for_store(store)
         edge_store.mark_webhook_processed(wh_id)
-        return {"type": "confirmation", "content": content, "store": store}
+        return {
+            "type": "confirmation",
+            "content": content,
+            "store": store,
+            "auto_closed": closed_n,
+        }
 
     # 3. 分類
     level, keyword_cat = classify_v2(content)
@@ -290,6 +305,162 @@ def process_webhook(content: str, user: str = "模擬用戶",
     return {"type": "new", "id": new_id,
             "level": level, "keyword_cat": keyword_cat,
             "content": content, "store": store}
+
+
+# ================================================================
+# v3：智能結案監聽器（每 5 分鐘觸發）
+# ================================================================
+def run_auto_closure_check() -> None:
+    """
+    每 5 分鐘自動掃描：
+    - 藍色 pending 事件超過靜默期 → auto_close_by_silence
+    - 24H monitoring 到期 → auto_close_expired
+    """
+    key = "edge_last_auto_check"
+    last = st.session_state.get(key)
+    now  = datetime.now()
+    if last is not None and (now - last).total_seconds() < 300:
+        return  # 未到 5 分鐘，跳過
+
+    # 藍色靜默期結案
+    n_silence = edge_store.auto_close_by_silence(silence_minutes=5)
+    # 24H 觀察期到期結案
+    n_expired = edge_store.auto_close_expired()
+    st.session_state[key] = now
+
+    total = n_silence + n_expired
+    if total > 0:
+        st.toast(
+            f"🤖 AI 智能結案：{n_silence} 筆藍色靜默期滿、{n_expired} 筆觀察期到期",
+            icon="✅"
+        )
+
+
+# ================================================================
+# v3：日常維護（每 24 小時觸發）
+# ================================================================
+def run_daily_maintenance() -> None:
+    """
+    每日維護：
+    - 超過 30 天事件歸檔至 archive_events
+    - 超過 7 天的已處理 Webhook 緩存清除
+    """
+    key = "edge_last_maintenance"
+    last = st.session_state.get(key)
+    now  = datetime.now()
+    if last is not None and (now - last).total_seconds() < 86400:
+        return  # 未到 24 小時，跳過
+
+    archived = edge_store.auto_archive_old_events(days=30)
+    cleaned  = edge_store.cleanup_old_webhooks(days=7)
+    st.session_state[key] = now
+
+    if archived > 0 or cleaned > 0:
+        st.toast(
+            f"🗂️ 日常維護：歸檔 {archived} 筆舊事件、清理 {cleaned} 筆 Webhook 緩存",
+            icon="🧹"
+        )
+
+
+# ================================================================
+# v3：AI 戰略點評生成（Claude API + Rule-based fallback）
+# ================================================================
+def generate_ai_strategic_summary(events: list[dict]) -> str:
+    """
+    根據今日事件產生 3 句話戰略點評。
+    優先呼叫 Claude claude-3-haiku；若無 API Key 或失敗，改用規則推導。
+    """
+    red_p   = [e for e in events if e["level"] == "red"    and e["status"] == "pending"]
+    yel_p   = [e for e in events if e["level"] == "yellow" and e["status"] == "pending"]
+    blu_p   = [e for e in events if e["level"] == "blue"   and e["status"] == "pending"]
+    overdue = edge_store.get_overdue_red_events(hours=4)
+    repeats = edge_store.get_repeat_repairs_24h()
+
+    # ── 嘗試 Claude API ───────────────────────────────────────────
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        try:
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or ""
+        except Exception:
+            pass
+
+    if api_key:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=api_key)
+            prompt = (
+                "你是嗑肉連鎖餐飲的數位運營分析師。\n"
+                "根據以下今日現場事件摘要，用繁體中文給出恰好 3 句話的戰略點評，"
+                "每句不超過 50 字，聚焦風險、行動建議、後續追蹤三個維度：\n\n"
+                f"• 紅色警戒（緊急）：{len(red_p)} 件\n"
+                f"• 黃色行動（支援）：{len(yel_p)} 件\n"
+                f"• 藍色任務（例行）：{len(blu_p)} 件\n"
+                f"• 逾時未處理（>4H）：{len(overdue)} 件\n"
+                f"• 24H 重複報修門店：{len(repeats)} 家"
+                + (f"（{', '.join(r['store'] for r in repeats[:3])}）" if repeats else "") + "\n\n"
+                "請直接輸出 3 句戰略建議，無需標題或編號。"
+            )
+            msg = client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=250,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text.strip()
+        except Exception:
+            pass  # fallback
+
+    # ── Rule-based Fallback ───────────────────────────────────────
+    lines = []
+
+    # 第 1 句：緊急狀況
+    if overdue:
+        stores = "、".join(e["store"] for e in overdue[:2])
+        lines.append(
+            f"⚠️ {stores} 等 {len(overdue)} 件紅色事件已逾 4 小時未回報，"
+            f"請主管立即介入確認現場狀況。"
+        )
+    elif red_p:
+        lines.append(
+            f"今日共 {len(red_p)} 件紅色警戒待處理，"
+            f"建議優先排查設備故障與電力異常，避免影響營業。"
+        )
+    else:
+        lines.append("目前紅色警戒清空，現場運營狀況穩定，持續保持每小時巡查頻率。")
+
+    # 第 2 句：系統性問題或人力
+    if repeats:
+        stores = "、".join(r["store"] for r in repeats[:2])
+        lines.append(
+            f"{stores} 出現 24H 重複報修，疑似設備系統性問題，"
+            f"建議安排廠商進行深度維保評估。"
+        )
+    elif yel_p:
+        lines.append(
+            f"黃色支援需求 {len(yel_p)} 件，人力調度請提前協調，"
+            f"假日旺季前應預先建立備援名單。"
+        )
+    else:
+        lines.append("黃色支援需求低，人力配置合理，日常調度流程順暢。")
+
+    # 第 3 句：整體結案趨勢
+    total_p = len(red_p) + len(yel_p) + len(blu_p)
+    if total_p > 10:
+        lines.append(
+            f"今日待處理事件達 {total_p} 件，建議啟動緊急協調機制，"
+            f"分流主管責任範疇並設定 2H 回報節點。"
+        )
+    elif total_p > 0:
+        lines.append(
+            f"今日共 {total_p} 件待處理事件，依三色分級有序推進，"
+            f"預計今日內可清零，建議晚間戰報確認結案率。"
+        )
+    else:
+        lines.append(
+            "今日事件已全數結案，整體運營表現優良，"
+            f"建議總部同步整理本日最佳應對實踐，納入 SOP 更新。"
+        )
+
+    return "\n\n".join(lines)
 
 
 # ================================================================
@@ -357,9 +528,9 @@ def show_decision_sandbox(item: dict):
         None
     )
     if rec_mgr:
-        cnt = rec_stats["cnt"] if rec_stats else "?"
+        cnt    = rec_stats["cnt"] if rec_stats else "?"
         is_def = bool(rec_stats and rec_stats.get("is_default"))
-        badge = "⭐ 預設" if is_def else f"（歷史指派 {cnt} 次）"
+        badge  = "⭐ 預設" if is_def else f"（歷史指派 {cnt} 次）"
         st.markdown(
             f'<div class="rec-badge">💡 AI 推薦主管：<strong>{rec_mgr}</strong> '
             f'<span style="opacity:0.7;font-size:0.78rem;">{badge} · 類別：{cat_cn or level}</span></div>',
@@ -392,7 +563,7 @@ def show_decision_sandbox(item: dict):
             "🚀 一次性核准並發送", type="primary",
             use_container_width=True, key=f"approve_{item['id']}"
         ):
-            now = datetime.now()
+            now       = datetime.now()
             mon_until = now + timedelta(hours=24)
             res_dl    = (now + timedelta(hours=4)) if level == "red" else None
 
@@ -423,11 +594,11 @@ def show_decision_sandbox(item: dict):
 
 
 # ================================================================
-# 對話氣泡渲染器
+# 對話氣泡渲染器（v3：支援 🤖 AI 自動結案標籤）
 # ================================================================
 def render_avatar_bubble(item: dict):
-    is_mon = item["status"] in ["monitoring", "closed"]
-    bg_cls = "bg-monitoring" if is_mon else f"bg-{item['level']}"
+    is_mon  = item["status"] in ["monitoring", "closed"]
+    bg_cls  = "bg-monitoring" if is_mon else f"bg-{item['level']}"
 
     hours_passed = (datetime.now() - item["created_at"]).total_seconds() / 3600
     if item["level"] == "red" and hours_passed > 4 and item["status"] == "pending":
@@ -442,6 +613,21 @@ def render_avatar_bubble(item: dict):
     assigned   = f' | 負責：{item["assigned_to"]}' if item.get("assigned_to") else ""
     user_name  = item.get("user") or item.get("user_alias", "")
 
+    # v3：AI 自動結案標籤
+    auto_closed_at = item.get("auto_closed_at")
+    ai_close_html  = ""
+    if auto_closed_at and item["status"] == "closed":
+        try:
+            ac_time = datetime.fromisoformat(str(auto_closed_at)).strftime("%H:%M")
+        except Exception:
+            ac_time = "—"
+        close_note = item.get("close_note", "AI 自動結案")
+        ai_close_html = (
+            f'<div style="margin-top:6px;">'
+            f'<span class="ai-close-label">🤖 {close_note}於 {ac_time}</span>'
+            f'</div>'
+        )
+
     st.markdown(f"""
 <div class="chat-bubble {bg_cls}">
     <div class="avatar">{avatar_ch}</div>
@@ -453,6 +639,7 @@ def render_avatar_bubble(item: dict):
         </div>
         <div style="font-size:14px;color:#333;margin-bottom:6px;line-height:1.5;">{item['content']}</div>
         <div style="font-size:12px;color:#888;">{time_html} | {status_lbl[item['status']]}{assigned}</div>
+        {ai_close_html}
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -463,15 +650,7 @@ def render_avatar_bubble(item: dict):
 
 
 # ================================================================
-# 自動化：24H 觀察期結束 → 結案
-# ================================================================
-def auto_process():
-    closed_n = edge_store.auto_close_expired()
-    return closed_n
-
-
-# ================================================================
-# 戰報產生器 v2（含重複報修 & 逾時紅標）
+# 戰報產生器 v3
 # ================================================================
 def generate_battle_report() -> str:
     now    = datetime.now()
@@ -480,13 +659,9 @@ def generate_battle_report() -> str:
     yel_p  = [e for e in evts if e["level"] == "yellow" and e["status"] == "pending"]
     blu_p  = [e for e in evts if e["level"] == "blue"   and e["status"] == "pending"]
 
-    # 重複報修（24H 同店 ≥2 次）
     repeat_stores = edge_store.get_repeat_repairs_24h()
+    overdue       = edge_store.get_overdue_red_events(hours=4)
 
-    # 逾時紅標（> 4H 未回報）
-    overdue = edge_store.get_overdue_red_events(hours=4)
-
-    # 今日熱心榜（取決策日誌）
     logs = edge_store.load_decision_logs(limit=50)
     mgr_today: dict[str, int] = {}
     today_str = now.strftime("%Y-%m-%d")
@@ -495,6 +670,10 @@ def generate_battle_report() -> str:
             m = log["assigned_to"]
             mgr_today[m] = mgr_today.get(m, 0) + 1
     top_mgrs = sorted(mgr_today.items(), key=lambda x: x[1], reverse=True)[:3]
+
+    # v3：AI 自動結案今日統計
+    ai_closed = [e for e in evts if e.get("auto_closed_at") and
+                 str(e.get("auto_closed_at", "")).startswith(today_str)]
 
     lines = [
         "🛡️ 【嗑肉數位總部 · 全景戰報】",
@@ -519,6 +698,7 @@ def generate_battle_report() -> str:
              for r in repeat_stores]
             or ["  ✅ 目前無重複報修"]
         ),
+        f"\n🤖 【AI 自動結案（今日）】{len(ai_closed)} 件",
         "\n🏆 【今日熱心榜】",
         *(
             [f"  {'🥇🥈🥉'[i]} {n}：今日指派 {c} 次"
@@ -526,13 +706,13 @@ def generate_battle_report() -> str:
             or ["  （今日尚無決策紀錄）"]
         ),
         "\n" + "=" * 32,
-        "📊 由分身參謀自動彙整 · SQLite v2",
+        "📊 由分身參謀自動彙整 · SQLite v3 · AI Edge Agent",
     ]
     return "\n".join(lines)
 
 
 # ================================================================
-# 側欄（含 Webhook 模擬器 + 戰報排程）
+# 側欄（含 Webhook 模擬器 / 🔥 壓力測試 / 戰報排程）
 # ================================================================
 def render_sidebar():
     with st.sidebar:
@@ -550,7 +730,7 @@ def render_sidebar():
             st.session_state.edge_last_scan = datetime.now()
             n = random.randint(1, 2)
             for _ in range(n):
-                tmpl = random.choice(_WEBHOOK_TEMPLATES)
+                tmpl  = random.choice(_WEBHOOK_TEMPLATES)
                 store = random.choice(STORE_LIST)
                 content = tmpl["content"].format(store=store)
                 process_webhook(content, user=tmpl["user"], store=store)
@@ -559,7 +739,7 @@ def render_sidebar():
 
         st.divider()
 
-        # ── Webhook 模擬器（新功能）───────────────────────────────
+        # ── Webhook 模擬器 ────────────────────────────────────────
         st.markdown("**🤖 模擬 Webhook 訊息**")
         custom_msg = st.text_input(
             "自訂訊息（留空 = 隨機）",
@@ -569,7 +749,7 @@ def render_sidebar():
         c1, c2 = st.columns(2)
         with c1:
             if st.button("📨 隨機模擬", use_container_width=True, key="edge_sim_random"):
-                tmpl = random.choice(_WEBHOOK_TEMPLATES)
+                tmpl  = random.choice(_WEBHOOK_TEMPLATES)
                 store = random.choice(STORE_LIST)
                 content = tmpl["content"].format(store=store)
                 result = process_webhook(content, user=tmpl["user"], store=store)
@@ -589,11 +769,37 @@ def render_sidebar():
         r = st.session_state.get("edge_webhook_result")
         if r:
             if r["type"] == "new":
-                st.success(f"✅ 新事件 #{r['id']}（{_LEVEL_LABELS.get(r['level'],r['level'])}）\n{r['content'][:40]}")
+                st.success(
+                    f"✅ 新事件 #{r['id']}（{_LEVEL_LABELS.get(r['level'], r['level'])}）\n"
+                    f"{r['content'][:40]}"
+                )
             elif r["type"] == "merged":
                 st.info(f"🔗 已合併至事件 #{r['merge_id']}\n{r['content'][:40]}")
             else:
-                st.info(f"🔍 確認語意，嘗試結案\n{r['content'][:40]}")
+                ac = r.get("auto_closed")
+                if ac:
+                    st.success(f"✅ 確認語意，已自動結案 {ac} 筆 monitoring 事件")
+                else:
+                    st.info(f"🔍 確認語意，無 monitoring 事件可結案\n{r['content'][:40]}")
+
+        st.divider()
+
+        # ── 🔥 壓力測試（v3 新增）────────────────────────────────
+        st.markdown("**🔥 壓力測試**")
+        st.caption("一次生成 20 筆隨機事件，測試看板與 manager_weights 學習")
+        if st.button("🔥 壓力測試 (20筆)", use_container_width=True,
+                     key="edge_stress_btn", type="secondary"):
+            with st.spinner("壓力測試中..."):
+                for i in range(20):
+                    tmpl  = random.choice(_WEBHOOK_TEMPLATES)
+                    store = random.choice(STORE_LIST)
+                    content = tmpl["content"].format(store=store)
+                    # 使用唯一用戶名稱繞過 5 分鐘合併窗口
+                    unique_user = f"壓測_{i:02d}_{random.randint(100,999)}"
+                    process_webhook(content, user=unique_user, store=store)
+            st.session_state.edge_webhook_result = None
+            st.success("✅ 壓力測試完成：20 筆事件已生成！")
+            st.rerun()
 
         st.divider()
 
@@ -610,14 +816,23 @@ def render_sidebar():
         # ── 即時統計 ──────────────────────────────────────────────
         evts = edge_store.load_events()
         st.markdown("**📊 即時統計**")
-        st.metric("總事件數",  len(evts))
-        st.metric("待處理",    len([e for e in evts if e["status"] == "pending"]))
-        st.metric("觀察中",    len([e for e in evts if e["status"] == "monitoring"]))
-        st.metric("已結案",    len([e for e in evts if e["status"] == "closed"]))
+        st.metric("總事件數", len(evts))
+        st.metric("待處理",   len([e for e in evts if e["status"] == "pending"]))
+        st.metric("觀察中",   len([e for e in evts if e["status"] == "monitoring"]))
+        st.metric("已結案",   len([e for e in evts if e["status"] == "closed"]))
+
+        # v3：AI 自動結案今日統計
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        ai_cnt = sum(
+            1 for e in evts
+            if e.get("auto_closed_at") and str(e.get("auto_closed_at","")).startswith(today_str)
+        )
+        if ai_cnt:
+            st.metric("🤖 AI 自動結案", ai_cnt)
 
         st.divider()
 
-        # ── 戰報排程（新功能）────────────────────────────────────
+        # ── 戰報排程 ──────────────────────────────────────────────
         st.markdown("**⏰ 戰報排程**")
         now = datetime.now()
         next_report = now.replace(hour=16, minute=50, second=0, microsecond=0)
@@ -627,15 +842,14 @@ def render_sidebar():
         st.caption(f"📅 下次自動戰報：`{next_report.strftime('%m/%d %H:%M')}`")
         st.caption(f"⏳ 倒數：{mins_left // 60}h {mins_left % 60}m")
 
-        if st.button("📋 立即產生戰報", use_container_width=True, type="primary", key="edge_report_btn"):
+        if st.button("📋 立即產生戰報", use_container_width=True,
+                     type="primary", key="edge_report_btn"):
             st.session_state.edge_show_report = True
 
         st.divider()
 
         # ── 決策學習日誌 ──────────────────────────────────────────
         st.markdown("**🧠 責任地圖 & 決策日誌**")
-        logs = edge_store.load_decision_logs(limit=5)
-        st.caption(f"已累積 {edge_store.load_decision_logs.__doc__ or len(logs)} 筆 →")
         mgr_stats = edge_store.get_manager_stats()
         defaults  = [s for s in mgr_stats if s["is_default"]]
         if defaults:
@@ -656,8 +870,8 @@ def render_main_dashboard():
 <div class="main-header">
     <h1 style="margin:0;">🛡️ 嗑肉數位總部</h1>
     <p style="margin:5px 0 0 0;opacity:0.9;">
-        分身參謀全景看板 v2.0 · Line Edge Agent Command Center<br>
-        <small>SQLite 數據橋接 · 語意腦強化 · 責任地圖學習</small>
+        分身參謀全景看板 v3.0 · Line Edge Agent Command Center<br>
+        <small>智能結案監聽器 · AI 戰略點評 · 多模態預留 · 自動化維護</small>
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -677,12 +891,12 @@ def render_main_dashboard():
     repeat_stores = edge_store.get_repeat_repairs_24h()
     if repeat_stores:
         names = "、".join(r["store"] for r in repeat_stores)
-        st.warning(f"⚡ **24H 重複報修警示**：{names} 在過去 24 小時內出現多次紅色事件，請重點跟進！")
+        st.warning(
+            f"⚡ **24H 重複報修警示**：{names} 在過去 24 小時內出現多次紅色事件，請重點跟進！"
+        )
 
     st.markdown("---")
-
     show_closed = st.session_state.edge_show_closed
-
     col_r, col_y, col_b = st.columns(3)
 
     def _render_col(col, level: str, header_html: str):
@@ -707,12 +921,28 @@ def render_main_dashboard():
 
 
 # ================================================================
-# 戰報彈窗
+# 戰報彈窗 v3（含 🤖 AI 戰略點評）
 # ================================================================
-@st.dialog("📡 全景戰報預覽 v2")
+@st.dialog("📡 全景戰報預覽 v3")
 def show_battle_report_dialog():
+    evts = edge_store.load_events()
+
     st.markdown("#### 即將推播至 Line 總指揮私訊：")
     st.code(generate_battle_report(), language=None)
+
+    # ── 🤖 AI 戰略點評（v3 新增）─────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🤖 AI 戰略點評")
+    with st.spinner("分析今日戰情中..."):
+        commentary = generate_ai_strategic_summary(evts)
+
+    st.markdown(
+        f'<div class="ai-commentary">{commentary}</div>',
+        unsafe_allow_html=True
+    )
+    st.caption("💡 由 Claude AI 根據今日事件自動生成（無 API Key 時切換規則推導）")
+
+    st.markdown("---")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("📤 模擬推播至 Line", type="primary",
@@ -737,8 +967,10 @@ def show_learning_dialog():
         logs = edge_store.load_decision_logs(limit=50)
         if logs:
             df = pd.DataFrame(logs)
-            st.dataframe(df[["ts","level","store","assigned_to","keyword_cat","draft_modified"]],
-                         use_container_width=True)
+            st.dataframe(
+                df[["ts", "level", "store", "assigned_to", "keyword_cat", "draft_modified"]],
+                use_container_width=True
+            )
         else:
             st.info("尚無決策紀錄")
 
@@ -749,7 +981,7 @@ def show_learning_dialog():
             df2["category_cn"] = df2["category"].map(lambda c: _CAT_CN.get(c, c))
             df2["狀態"] = df2["is_default"].map({1: "⭐ 預設", 0: "—"})
             st.dataframe(
-                df2[["manager","category_cn","cnt","狀態"]].rename(columns={
+                df2[["manager", "category_cn", "cnt", "狀態"]].rename(columns={
                     "manager": "主管", "category_cn": "類別", "cnt": "指派次數"
                 }),
                 use_container_width=True
@@ -768,7 +1000,11 @@ def show_learning_dialog():
 # ================================================================
 def main():
     _edge_init()
-    auto_process()
+
+    # v3：自動化背景程序
+    run_auto_closure_check()   # 每 5 分鐘：智能結案監聽器
+    run_daily_maintenance()    # 每 24 小時：數據清理 & 歸檔
+
     render_sidebar()
     render_main_dashboard()
 
