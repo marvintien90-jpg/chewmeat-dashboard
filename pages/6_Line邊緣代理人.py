@@ -840,40 +840,6 @@ def render_sidebar():
         st.markdown("## 🛡️ 控制台")
         st.divider()
 
-        # ── Line API 連線狀態（60秒緩存）────────────────────────────
-        st.markdown("**📡 Line API 連線狀態**")
-        if _HAS_LINE_UTILS:
-            token  = _line_utils.get_channel_access_token()
-            secret = _line_utils.get_channel_secret()
-            if token and secret:
-                cache_key = "edge_line_status_cache"
-                cache_ts  = "edge_line_status_ts"
-                cached  = st.session_state.get(cache_key)
-                last_ts = st.session_state.get(cache_ts)
-                now_ts  = datetime.now()
-                if cached is None or (last_ts and (now_ts - last_ts).total_seconds() > 60):
-                    with st.spinner("驗證中..."):
-                        cached = _line_utils.check_connection()
-                    st.session_state[cache_key] = cached
-                    st.session_state[cache_ts]  = now_ts
-
-                if cached.get("ok"):
-                    st.success(f"🟢 已連線  **Bot：** {cached.get('bot_name','—')}")
-                else:
-                    st.error(f"🔴 連線失敗  {cached.get('reason','未知')}")
-                if st.button("🔄 重新驗證", key="edge_line_recheck", use_container_width=True):
-                    st.session_state.pop("edge_line_status_cache", None)
-                    st.rerun()
-            else:
-                missing = []
-                if not token:  missing.append("ACCESS_TOKEN")
-                if not secret: missing.append("CHANNEL_SECRET")
-                st.warning(f"⚪ 未設定：{', '.join(missing)}")
-        else:
-            st.caption("⚪ requests 未安裝（模擬模式）")
-
-        st.divider()
-
         # ── 即時統計（4 metric）──────────────────────────────────────
         evts = edge_store.load_events()
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -902,6 +868,35 @@ def render_sidebar():
 
         st.divider()
         st.page_link("app.py", label="← 返回總部大門")
+        st.divider()
+
+        # ── Line API 連線狀態（置底，緊湊顯示）─────────────────────
+        st.markdown("**📡 Line API**")
+        if _HAS_LINE_UTILS:
+            token  = _line_utils.get_channel_access_token()
+            secret = _line_utils.get_channel_secret()
+            if token and secret:
+                cache_key = "edge_line_status_cache"
+                cache_ts  = "edge_line_status_ts"
+                cached  = st.session_state.get(cache_key)
+                last_ts = st.session_state.get(cache_ts)
+                now_ts  = datetime.now()
+                if cached is None or (last_ts and (now_ts - last_ts).total_seconds() > 60):
+                    cached = _line_utils.check_connection()
+                    st.session_state[cache_key] = cached
+                    st.session_state[cache_ts]  = now_ts
+                if cached.get("ok"):
+                    st.caption(f"🟢 已連線 · {cached.get('bot_name','—')}")
+                else:
+                    st.caption(f"🔴 連線失敗 · {cached.get('reason','')[:20]}")
+                if st.button("🔄 重驗", key="edge_line_recheck", use_container_width=True):
+                    st.session_state.pop("edge_line_status_cache", None)
+                    st.rerun()
+            else:
+                st.caption("⚪ 尚未設定 API 金鑰")
+                st.caption("→ 請至「⚙️ 系統設定」填入")
+        else:
+            st.caption("⚪ 模擬模式（requests 未安裝）")
 
 
 # ================================================================
