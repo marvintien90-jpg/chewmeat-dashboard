@@ -214,7 +214,8 @@ def get_webhook_server_health() -> dict:
         return {"url": base, "online": False, "detail": {"error": str(e)[:80]}, "mode": "remote"}
 
 # ================================================================
-# LINE API 設定：頁面載入時從 SQLite 注入 os.environ
+# LINE API 設定：頁面載入時注入 os.environ
+# 優先順序：st.secrets（Streamlit Cloud）→ SQLite（本機/DB 設定）→ os.environ 維持原值
 # ================================================================
 _LINE_CFG_KEYS = [
     "LINE_CHANNEL_SECRET",
@@ -224,9 +225,19 @@ _LINE_CFG_KEYS = [
 ]
 for _k in _LINE_CFG_KEYS:
     if not os.environ.get(_k):
-        _v = edge_store.get_setting(f"app_cfg_{_k}")
-        if _v:
-            os.environ[_k] = _v
+        # 1. Streamlit Cloud Secrets（部署環境，最優先）
+        _sv = ""
+        try:
+            _sv = (st.secrets.get(_k, "") or "").strip()
+        except Exception:
+            pass
+        if _sv:
+            os.environ[_k] = _sv
+        else:
+            # 2. SQLite（本機 DB 設定值）
+            _v = edge_store.get_setting(f"app_cfg_{_k}")
+            if _v:
+                os.environ[_k] = _v
 
 # ── Claude AI API Key 注入（優先順序：st.secrets → SQLite → os.environ 維持原值）──
 if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -1514,10 +1525,13 @@ def render_view_settings():
         else:
             ai_status = "⚪ 尚未設定 API Key"
 
-        # LINE API
-        _line_secret = edge_store.get_setting("app_cfg_LINE_CHANNEL_SECRET") or ""
-        _line_token  = edge_store.get_setting("app_cfg_LINE_CHANNEL_ACCESS_TOKEN") or ""
-        _line_cmd    = edge_store.get_setting("app_cfg_LINE_COMMANDER_USER_ID") or ""
+        # LINE API（優先讀 os.environ，已由頁面載入時從 st.secrets/SQLite 注入）
+        _line_secret = (os.environ.get("LINE_CHANNEL_SECRET")
+                        or edge_store.get_setting("app_cfg_LINE_CHANNEL_SECRET") or "")
+        _line_token  = (os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+                        or edge_store.get_setting("app_cfg_LINE_CHANNEL_ACCESS_TOKEN") or "")
+        _line_cmd    = (os.environ.get("LINE_COMMANDER_USER_ID")
+                        or edge_store.get_setting("app_cfg_LINE_COMMANDER_USER_ID") or "")
         if _line_secret and _line_token:
             line_status = "🟢 Channel Secret 與 Token 已設定"
             if not _line_cmd:
