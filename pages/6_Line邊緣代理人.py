@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-import random, re
+import random, re, json
 import json as _json
 
 # ── 頁面設定 ─────────────────────────────────────────────────────
@@ -348,7 +348,21 @@ footer    { visibility: hidden; }
 # ================================================================
 # 常數 & Helper
 # ================================================================
-MANAGER_LIST = ["張主管", "李主管", "王主管", "陳主管", "林主管"]
+
+def _get_window_list() -> list[str]:
+    """動態讀取執行窗口名單（來源：app_cfg_WINDOW_LIST 設定）"""
+    try:
+        raw = edge_store.get_setting("app_cfg_WINDOW_LIST") or "[]"
+        lst = json.loads(raw)
+        return lst if lst else ["（未指派）"]
+    except Exception:
+        return ["（未指派）"]
+
+
+# 向下相容：MANAGER_LIST 改為動態讀取
+def _get_manager_list() -> list[str]:
+    return _get_window_list()
+
 
 _CAT_CN       = edge_nlp.CAT_CN
 _LEVEL_LABELS = edge_nlp.LEVEL_LABELS
@@ -909,13 +923,52 @@ def show_decision_sandbox(item: dict):
 
     st.markdown("---")
     st.markdown("#### 👥 責任歸屬指派")
-    default_idx = MANAGER_LIST.index(rec_mgr) if rec_mgr in MANAGER_LIST else 0
+    window_list  = _get_window_list()
+    default_win  = rec_mgr if rec_mgr in window_list else window_list[0]
+    default_widx = window_list.index(default_win) if default_win in window_list else 0
     assigned = st.selectbox(
-        "指定執行主管",
-        MANAGER_LIST,
-        index=default_idx,
+        "指定執行窗口",
+        window_list,
+        index=default_widx,
         key=f"mgr_{item['id']}"
     )
+
+    # ── 目標群組下拉選單 ──────────────────────────────────────────
+    st.markdown("#### 📡 目標推播群組")
+    # 取得群組列表（遠端優先 → 本機）
+    _avail_groups: list[dict] = []
+    _grp_data = _remote_get("/api/groups")
+    if _grp_data is not None:
+        _avail_groups = _grp_data.get("groups", [])
+    else:
+        _avail_groups = edge_store.load_line_groups()
+
+    _src_group_id = item.get("group_id", "")
+    _grp_options  = [{"group_id": "", "store_name": "（不推播）"}] + _avail_groups
+    _grp_labels   = [
+        (g["store_name"] + f" [{g['group_id'][:12]}...]") if g["group_id"] else "（不推播）"
+        for g in _grp_options
+    ]
+    # 預設選中來源群組
+    _grp_default = 0
+    for _gi, _gopt in enumerate(_grp_options):
+        if _gopt["group_id"] == _src_group_id:
+            _grp_default = _gi
+            break
+
+    _grp_sel_idx = st.selectbox(
+        "推播目標群組（預設為來源群組）",
+        range(len(_grp_options)),
+        index=_grp_default,
+        format_func=lambda i: _grp_labels[i],
+        key=f"grp_{item['id']}",
+    )
+    group_id = _grp_options[_grp_sel_idx]["group_id"]
+
+    if group_id and _HAS_LINE_UTILS:
+        st.caption(f"📡 核准後將推播至：`{group_id[:20]}...`（{_grp_options[_grp_sel_idx]['store_name']}）")
+    elif not group_id:
+        st.caption("⚠️ 未選擇群組，核准後不會推播至 LINE")
 
     st.markdown("#### ✍️ 審核分身草稿")
     raw_draft = generate_draft(item).replace("[指定主管]", assigned)
@@ -925,15 +978,7 @@ def show_decision_sandbox(item: dict):
         key=f"draft_{item['id']}"
     )
 
-    group_id   = item.get("group_id", "")
     user_alias = item.get("user") or item.get("user_alias", "")
-    if group_id and _HAS_LINE_UTILS:
-        st.caption(f"📡 來源群組：`{group_id[:20]}...` — 核准後將自動推播回此群組")
-    elif not group_id and user_alias and not user_alias.startswith("模擬"):
-        # 有真實 LINE 用戶 ID 但無群組 → 私訊（非群組）
-        st.caption("📱 此為 LINE 私訊（非群組）— 核准後無法推播回群組，可手動轉發")
-    elif not group_id:
-        st.caption("⚠️ 此為模擬器事件，核准後不會推播至 Line")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -1229,6 +1274,16 @@ def render_sidebar(evts: list[dict]):
         else:
             st.caption("⚪ 尚未設定門店")
             st.caption("→ 請至「⚙️ 系統設定」新增")
+
+        # ── 執行窗口快速狀態 ───────────────────────────────────────
+        _wl    = _get_window_list()
+        _real_wl = [w for w in _wl if w != "（未指派）"]
+        st.markdown("**👤 執行窗口**")
+        if _real_wl:
+            st.caption(f"🟢 已設定 {len(_real_wl)} 位執行窗口")
+        else:
+            st.caption("⚪ 尚未設定執行窗口")
+            st.caption("→ 請至「⚙️ 系統設定 → 執行窗口」新增")
 
 
 # ================================================================
@@ -1530,10 +1585,11 @@ def render_view_report(evts: list[dict]):
 def render_view_settings():
     st.markdown("### ⚙️ 系統設定")
 
-    tab_status, tab_ai, tab_stores, tab_line, tab_groups, tab_dev = st.tabs([
+    tab_status, tab_ai, tab_stores, tab_windows, tab_line, tab_groups, tab_dev = st.tabs([
         "🔧 系統狀態",
         "🤖 Claude AI",
         "🏪 門店管理",
+        "👤 執行窗口",
         "📡 LINE API",
         "🔗 群組綁定",
         "🧪 開發者工具",
@@ -1606,11 +1662,16 @@ def render_view_settings():
         else:
             wh_status = "⚪ 本機模式（localhost / 尚未部署 Render）— 見「📡 LINE API」Tab 設定部署說明"
 
+        _win_list    = _get_window_list()
+        _real_wins   = [w for w in _win_list if w != "（未指派）"]
+        window_status = f"🟢 已設定 {len(_real_wins)} 位執行窗口" if _real_wins else "⚪ 尚未設定執行窗口"
+
         rows = [
             {"模組": "🤖 Claude AI",        "狀態": ai_status},
             {"模組": "🌐 Webhook Server",    "狀態": wh_status},
             {"模組": "📡 LINE API",          "狀態": line_status},
             {"模組": "🏪 門店管理",          "狀態": store_status},
+            {"模組": "👤 執行窗口",          "狀態": window_status},
             {"模組": "🔗 群組綁定",          "狀態": group_status},
             {"模組": "📂 事件資料",          "狀態": evt_status},
         ]
@@ -1841,7 +1902,91 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
                 st.rerun()
 
     # ──────────────────────────────────────────────────────────────
-    # Tab 4：LINE API 設定
+    # Tab 4：執行窗口管理
+    # ──────────────────────────────────────────────────────────────
+    with tab_windows:
+        st.markdown("#### 👤 執行窗口管理")
+        st.caption("設定可指派的執行窗口名單，決策沙盒的下拉選單將以此為來源。")
+
+        current_windows = _get_window_list()
+        # 過濾掉預設佔位值
+        real_windows = [w for w in current_windows if w != "（未指派）"]
+
+        if not real_windows:
+            st.warning("尚未設定任何執行窗口，請使用下方「➕ 新增執行窗口」開始建立名單。")
+        else:
+            st.markdown(f"目前共 **{len(real_windows)}** 位執行窗口")
+            cols_per_row = 3
+            for row_start in range(0, len(real_windows), cols_per_row):
+                row_ws = real_windows[row_start: row_start + cols_per_row]
+                cols   = st.columns(cols_per_row)
+                for idx, wname in enumerate(row_ws):
+                    with cols[idx]:
+                        wc1, wc2 = st.columns([4, 1])
+                        wc1.markdown(f"**{wname}**")
+                        if wc2.button("✕", key=f"del_win_{wname}_{row_start}_{idx}",
+                                      help=f"刪除 {wname}"):
+                            new_list = [w for w in real_windows if w != wname]
+                            edge_store.set_window_list(new_list if new_list else [])
+                            st.toast(f"✅ 已刪除執行窗口：{wname}")
+                            st.rerun()
+
+        st.divider()
+        st.markdown("#### ➕ 新增執行窗口")
+        win_col1, win_col2 = st.columns([4, 1])
+        new_win_name = win_col1.text_input(
+            "執行窗口姓名",
+            key="new_window_input",
+            placeholder="例：張窗口、李窗口…",
+            label_visibility="collapsed",
+        )
+        if win_col2.button("新增", key="add_window_btn"):
+            name = new_win_name.strip()
+            if name:
+                if name not in real_windows:
+                    new_list = real_windows + [name]
+                    edge_store.set_window_list(new_list)
+                    st.toast(f"✅ 已新增執行窗口：{name}")
+                    st.rerun()
+                else:
+                    st.warning(f"「{name}」已存在")
+            else:
+                st.warning("請輸入執行窗口姓名")
+
+        # 批次匯入
+        st.divider()
+        st.markdown("#### 📋 批次匯入（每行一位）")
+        bulk_win_input = st.text_area(
+            "批次執行窗口名單",
+            key="bulk_window_input",
+            placeholder="張窗口\n李窗口\n王窗口",
+            height=100,
+            label_visibility="collapsed",
+        )
+        if st.button("📋 批次新增", key="bulk_win_btn"):
+            lines  = [l.strip() for l in bulk_win_input.splitlines() if l.strip()]
+            added  = []
+            cur_ws = list(real_windows)
+            for s in lines:
+                if s and s not in cur_ws:
+                    cur_ws.append(s)
+                    added.append(s)
+            if added:
+                edge_store.set_window_list(cur_ws)
+                st.success(f"✅ 已批次新增 {len(added)} 位執行窗口：{', '.join(added[:5])}{'…' if len(added) > 5 else ''}")
+                st.rerun()
+            else:
+                st.info("沒有新執行窗口可新增（輸入的名稱已存在或為空）")
+
+        if real_windows:
+            st.divider()
+            if st.button("🗑️ 清空所有執行窗口", key="clear_all_windows_btn", type="secondary"):
+                edge_store.set_window_list([])
+                st.toast("✅ 執行窗口名單已清空")
+                st.rerun()
+
+    # ──────────────────────────────────────────────────────────────
+    # Tab 5：LINE API 設定
     # ──────────────────────────────────────────────────────────────
     with tab_line:
         st.markdown("#### 📡 LINE API 設定")
@@ -2009,7 +2154,7 @@ LINE_GROUP_STORE_MAP      = {} （先留空，待群組綁定後更新）
                 st.warning("⚠️ requests 套件未安裝，無法測試真實連線（目前為模擬模式）")
 
     # ──────────────────────────────────────────────────────────────
-    # Tab 5：群組→門店 綁定
+    # Tab 6：群組→門店 綁定
     # ──────────────────────────────────────────────────────────────
     with tab_groups:
         st.markdown("#### 🔗 群組 → 門店 綁定")
@@ -2159,7 +2304,7 @@ LINE_GROUP_STORE_MAP      = {} （先留空，待群組綁定後更新）
                 st.warning("請先至「🏪 門店管理」新增門店")
 
     # ──────────────────────────────────────────────────────────────
-    # Tab 6：開發者工具
+    # Tab 7：開發者工具
     # ──────────────────────────────────────────────────────────────
     with tab_dev:
         st.markdown("#### 🧪 開發者工具")

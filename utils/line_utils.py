@@ -219,6 +219,170 @@ def push_battle_report(group_id: str, report_text: str) -> bool:
     return push_message(group_id, report_text)
 
 
+def push_with_quick_reply(to: str, text: str, event_id: int) -> bool:
+    """推播帶 Quick Reply 按鈕的訊息（核准/結案）"""
+    if not to:
+        return False
+    code, _ = _line_post(_LINE_PUSH_URL, {
+        "to": to,
+        "messages": [{
+            "type": "text",
+            "text": text[:2000],
+            "quickReply": {
+                "items": [
+                    {
+                        "type": "action",
+                        "action": {
+                            "type": "postback",
+                            "label": "✅ 核准",
+                            "data": f"approve:{event_id}",
+                            "displayText": "✅ 核准",
+                        },
+                    },
+                    {
+                        "type": "action",
+                        "action": {
+                            "type": "postback",
+                            "label": "❌ 結案",
+                            "data": f"close:{event_id}",
+                            "displayText": "❌ 結案",
+                        },
+                    },
+                    {
+                        "type": "action",
+                        "action": {
+                            "type": "message",
+                            "label": "📋 查看",
+                            "text": f"查看 #{event_id}",
+                        },
+                    },
+                ]
+            },
+        }]
+    })
+    return code == 200
+
+
+def push_event_flex(to: str, event: dict, liff_base_url: str = "") -> bool:
+    """推播 Flex Message 決策卡片"""
+    if not to:
+        return False
+    event_id = event.get("id", 0)
+    level    = event.get("level", "blue")
+    store    = event.get("store", "")
+    content  = event.get("content", "")[:60]
+    user     = event.get("user_alias", "") or event.get("user", "")
+    cat      = event.get("keyword_cat", "")
+
+    color_map = {"red": "#E74C3C", "yellow": "#F39C12", "blue": "#3498DB"}
+    color     = color_map.get(level, "#3498DB")
+    emoji_map = {"red": "🔴", "yellow": "🟡", "blue": "🔵"}
+    emoji     = emoji_map.get(level, "🔵")
+
+    footer_contents = [
+        {
+            "type": "button",
+            "action": {
+                "type": "postback",
+                "label": "✅ 核准",
+                "data": f"approve:{event_id}",
+                "displayText": f"✅ 核准 #{event_id}",
+            },
+            "style": "primary",
+            "color": "#27AE60",
+            "flex": 1,
+        },
+        {
+            "type": "button",
+            "action": {
+                "type": "postback",
+                "label": "❌ 結案",
+                "data": f"close:{event_id}",
+                "displayText": f"❌ 結案 #{event_id}",
+            },
+            "style": "primary",
+            "color": "#E74C3C",
+            "flex": 1,
+        },
+    ]
+    if liff_base_url:
+        liff_url = f"{liff_base_url}?event_id={event_id}"
+        footer_contents.append({
+            "type": "button",
+            "action": {"type": "uri", "label": "📱 LIFF", "uri": liff_url},
+            "style": "secondary",
+            "flex": 1,
+        })
+
+    flex_msg = {
+        "type": "flex",
+        "altText": f"{emoji} 事件 #{event_id}｜{store}｜{content[:30]}",
+        "contents": {
+            "type": "bubble",
+            "size": "mega",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": color,
+                "paddingAll": "16px",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": f"{emoji} 事件 #{event_id}",
+                        "color": "#FFFFFF",
+                        "weight": "bold",
+                        "size": "lg",
+                    },
+                    {
+                        "type": "text",
+                        "text": f"📍 {store}  👤 {user}",
+                        "color": "#FFFFFFCC",
+                        "size": "xs",
+                        "margin": "xs",
+                    },
+                ],
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "paddingAll": "16px",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": content,
+                        "wrap": True,
+                        "size": "md",
+                        "color": "#333333",
+                    },
+                    {"type": "separator", "margin": "md"},
+                    {
+                        "type": "text",
+                        "text": f"類別：{cat}",
+                        "size": "xs",
+                        "color": "#888888",
+                        "margin": "md",
+                    },
+                ],
+            },
+            "footer": {
+                "type": "box",
+                "layout": "horizontal",
+                "spacing": "sm",
+                "paddingAll": "12px",
+                "contents": footer_contents,
+            },
+        },
+    }
+
+    code, resp = _line_post(_LINE_PUSH_URL, {
+        "to": to,
+        "messages": [flex_msg],
+    })
+    if code != 200:
+        logger.warning(f"push_event_flex failed: {resp}")
+    return code == 200
+
+
 # ── Bot 資訊查詢 ──────────────────────────────────────────────────
 def check_connection() -> dict:
     """

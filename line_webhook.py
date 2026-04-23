@@ -30,11 +30,11 @@ Streamlit Secrets（.streamlit/secrets.toml）或 Render 環境變數：
 ══════════════════════════════════════════════════════════
 """
 from __future__ import annotations
-import sys, os, json, logging
+import sys, os, json, logging, re
 sys.path.insert(0, os.path.dirname(__file__))
 
 from fastapi import FastAPI, Request, HTTPException, Header
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
 from typing import Optional
 from datetime import datetime
 
@@ -48,6 +48,8 @@ from utils.line_utils import (
     send_reply,
     push_message,
     get_user_display_name,
+    push_event_flex,
+    push_with_quick_reply,
 )
 
 # ── 初始化 ────────────────────────────────────────────────────────
@@ -180,8 +182,14 @@ async def line_webhook(
 def _handle_event(event: dict) -> Optional[dict]:
     """
     處理單一 Line 事件。
-    目前只處理 type=message 且 message.type=text 的文字訊息。
+    支援 type=message（文字）、type=postback。
     """
+    # ── Postback 事件（Quick Reply / Flex 按鈕）──────────────────
+    if event.get("type") == "postback":
+        data     = event.get("postback", {}).get("data", "")
+        user_id  = event.get("source", {}).get("userId", "")
+        return _handle_postback(data, user_id)
+
     # 只處理文字訊息
     if event.get("type") != "message":
         return None
@@ -201,8 +209,15 @@ def _handle_event(event: dict) -> Optional[dict]:
 
     logger.info(
         f"[{source_type}] uid={line_user_id[:8]}... "
-        f"gid={group_id[:8]}... text={text[:60]}"
+        f"gid={group_id[:8] if group_id else ''}... text={text[:60]}"
     )
+
+    # ── A. Commander 指令型控制（直接文字指令）──────────────────
+    commander_id = os.environ.get("LINE_COMMANDER_USER_ID", "").strip()
+    if commander_id and line_user_id == commander_id:
+        cmd_result = _handle_commander_command(text, reply_token)
+        if cmd_result is not None:
+            return cmd_result
 
     # ── 1. 緩存原始訊息 ──────────────────────────────────────────
     wh_id = edge_store.cache_webhook(
@@ -269,6 +284,26 @@ def _handle_event(event: dict) -> Optional[dict]:
         )
         send_reply(reply_token, reply_tx)
 
+    # ── 9. 推播 Flex Message 給 Commander（帶 LIFF 按鈕）─────────
+    if commander_id:
+        liff_base = os.environ.get("LIFF_URL", "").strip()
+        if not liff_base:
+            _wh_url = os.environ.get("LINE_WEBHOOK_SERVER_URL", "").strip().rstrip("/")
+            if _wh_url and "localhost" not in _wh_url and "127.0.0.1" not in _wh_url:
+                liff_base = f"{_wh_url}/liff"
+        evt_obj = {
+            "id":          new_id,
+            "level":       level,
+            "store":       store,
+            "user_alias":  user_alias,
+            "content":     text,
+            "keyword_cat": keyword_cat,
+        }
+        try:
+            push_event_flex(commander_id, evt_obj, liff_base_url=liff_base)
+        except Exception as e:
+            logger.warning(f"push_event_flex to commander failed: {e}")
+
     return {
         "type":        "new",
         "id":          new_id,
@@ -276,6 +311,194 @@ def _handle_event(event: dict) -> Optional[dict]:
         "keyword_cat": keyword_cat,
         "store":       store,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# A. Commander 指令型控制
+# ═══════════════════════════════════════════════════════════════════
+_CMD_RE = re.compile(r'(核准|結案|拒絕|轉傳)\s*#?(\d+)(?:\s+(.+))?')
+
+
+def _handle_commander_command(text: str, reply_token: str) -> Optional[dict]:
+    """
+    解析 Commander 發送的文字指令並執行。
+    格式：
+      核准 #8          → 核准事件 8
+      核准 #8 張窗口   → 核准事件 8，指派窗口為「張窗口」
+      結案 #8          → 結案事件 8
+      轉傳 #8 崇德店   → 核准事件 8 並改推播到崇德店對應群組
+    回傳 None 表示不是指令（交由後續正常流程處理）。
+    """
+    m = _CMD_RE.search(text)
+    if not m:
+        return None
+
+    action   = m.group(1)
+    event_id = int(m.group(2))
+    param    = (m.group(3) or "").strip()
+
+    commander_id = os.environ.get("LINE_COMMANDER_USER_ID", "").strip()
+
+    if action == "核准":
+        # 取得事件資料
+        evts = edge_store.load_events(limit=300)
+        evt  = next((e for e in evts if e.get("id") == event_id), None)
+        if not evt:
+            msg = f"❌ 找不到事件 #{event_id}"
+            if commander_id:
+                push_message(commander_id, msg)
+            return {"type": "cmd_error", "event_id": event_id, "reason": "not_found"}
+
+        assigned = param or "（未指派）"
+        group_id = evt.get("group_id", "")
+        from datetime import timedelta
+        now       = datetime.now()
+        mon_until = now + timedelta(hours=24)
+        res_dl    = (now + timedelta(hours=4)) if evt.get("level") == "red" else None
+        edge_store.update_event(
+            event_id,
+            status="monitoring",
+            assigned_to=assigned,
+            monitoring_until=mon_until,
+            response_deadline=res_dl,
+        )
+        edge_store.log_decision(
+            event_id=event_id,
+            level=evt.get("level", "blue"),
+            store=evt.get("store", ""),
+            assigned_to=assigned,
+            draft_modified=False,
+            keyword_cat=evt.get("keyword_cat", ""),
+        )
+        if group_id:
+            push_message(group_id, f"✅ 事件 #{event_id} 已核准，執行窗口：{assigned}")
+        if commander_id:
+            push_message(commander_id, f"✅ 已核准事件 #{event_id}，指派：{assigned}")
+        logger.info(f"Commander approved event #{event_id} -> {assigned}")
+        return {"type": "cmd_approve", "event_id": event_id, "assigned": assigned}
+
+    elif action == "結案":
+        edge_store.update_event(event_id, status="closed")
+        if commander_id:
+            push_message(commander_id, f"✅ 事件 #{event_id} 已結案")
+        logger.info(f"Commander closed event #{event_id}")
+        return {"type": "cmd_close", "event_id": event_id}
+
+    elif action == "拒絕":
+        edge_store.update_event(event_id, status="closed")
+        if commander_id:
+            push_message(commander_id, f"✅ 事件 #{event_id} 已拒絕並結案")
+        return {"type": "cmd_reject", "event_id": event_id}
+
+    elif action == "轉傳":
+        # param = 門店名，找對應群組
+        evts = edge_store.load_events(limit=300)
+        evt  = next((e for e in evts if e.get("id") == event_id), None)
+        if not evt:
+            if commander_id:
+                push_message(commander_id, f"❌ 找不到事件 #{event_id}")
+            return {"type": "cmd_error", "event_id": event_id, "reason": "not_found"}
+
+        target_group = ""
+        if param:
+            # 從 line_groups 找對應門店
+            groups = edge_store.load_line_groups()
+            for g in groups:
+                if g.get("store_name") == param:
+                    target_group = g["group_id"]
+                    break
+
+        from datetime import timedelta
+        now       = datetime.now()
+        mon_until = now + timedelta(hours=24)
+        edge_store.update_event(event_id, status="monitoring",
+                                monitoring_until=mon_until)
+        edge_store.log_decision(
+            event_id=event_id,
+            level=evt.get("level", "blue"),
+            store=evt.get("store", ""),
+            assigned_to="轉傳",
+            draft_modified=False,
+            keyword_cat=evt.get("keyword_cat", ""),
+        )
+        if target_group:
+            push_message(target_group,
+                         f"📢 轉傳事件 #{event_id}：{evt.get('content','')[:80]}")
+        if commander_id:
+            push_message(
+                commander_id,
+                f"✅ 事件 #{event_id} 已轉傳至 {param}（群組 {target_group[:12] if target_group else '未找到'}）"
+            )
+        return {"type": "cmd_forward", "event_id": event_id, "target": param}
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# C. Postback 處理（Quick Reply / Flex 按鈕）
+# ═══════════════════════════════════════════════════════════════════
+def _handle_postback(data: str, user_id: str) -> Optional[dict]:
+    """
+    處理 LINE postback 事件。
+    支援：
+      approve:<event_id>  → 核准事件
+      close:<event_id>    → 結案事件
+    """
+    commander_id = os.environ.get("LINE_COMMANDER_USER_ID", "").strip()
+
+    if data.startswith("approve:"):
+        try:
+            event_id = int(data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            return None
+
+        evts = edge_store.load_events(limit=300)
+        evt  = next((e for e in evts if e.get("id") == event_id), None)
+        if not evt:
+            if commander_id:
+                push_message(commander_id, f"❌ 找不到事件 #{event_id}")
+            return {"type": "postback_error", "event_id": event_id}
+
+        from datetime import timedelta
+        now       = datetime.now()
+        mon_until = now + timedelta(hours=24)
+        res_dl    = (now + timedelta(hours=4)) if evt.get("level") == "red" else None
+        edge_store.update_event(
+            event_id,
+            status="monitoring",
+            assigned_to="（Postback 核准）",
+            monitoring_until=mon_until,
+            response_deadline=res_dl,
+        )
+        edge_store.log_decision(
+            event_id=event_id,
+            level=evt.get("level", "blue"),
+            store=evt.get("store", ""),
+            assigned_to="（Postback 核准）",
+            draft_modified=False,
+            keyword_cat=evt.get("keyword_cat", ""),
+        )
+        group_id = evt.get("group_id", "")
+        if group_id:
+            push_message(group_id, f"✅ 事件 #{event_id} 已核准，總部正在處理中。")
+        if commander_id:
+            push_message(commander_id, f"✅ 事件 #{event_id} 已透過 Postback 核准。")
+        logger.info(f"Postback approved event #{event_id} by user {user_id[:8]}")
+        return {"type": "postback_approve", "event_id": event_id}
+
+    elif data.startswith("close:"):
+        try:
+            event_id = int(data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            return None
+
+        edge_store.update_event(event_id, status="closed")
+        if commander_id:
+            push_message(commander_id, f"✅ 事件 #{event_id} 已透過 Postback 結案。")
+        logger.info(f"Postback closed event #{event_id} by user {user_id[:8]}")
+        return {"type": "postback_close", "event_id": event_id}
+
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -458,16 +681,32 @@ async def approve_event_api(event_id: int, request: Request):
         push_group_ok = push_message(group_id, line_msg)
         logger.info(f"Push to group {group_id[:8]}...: {'ok' if push_group_ok else 'fail'}")
 
-    # 4. 推播核准通知到 Commander 個人 LINE
+    # 4. 推播核准通知到 Commander 個人 LINE（Flex Message）
     commander_id = os.environ.get("LINE_COMMANDER_USER_ID", "")
     if commander_id and line_msg:
-        cmd_notify = (
-            f"✅ 【核准通知】\n"
-            f"📍 {store} · 事件 #{event_id}\n"
-            f"👤 指派：{assigned}\n"
-            f"📋 指令：{line_msg[:80]}{'...' if len(line_msg)>80 else ''}"
-        )
-        push_cmd_ok = push_message(commander_id, cmd_notify)
+        liff_base = os.environ.get("LIFF_URL", "").strip()
+        if not liff_base:
+            _wh_url = os.environ.get("LINE_WEBHOOK_SERVER_URL", "").strip().rstrip("/")
+            if _wh_url and "localhost" not in _wh_url and "127.0.0.1" not in _wh_url:
+                liff_base = f"{_wh_url}/liff"
+        evt_obj = {
+            "id":          event_id,
+            "level":       level,
+            "store":       store,
+            "user_alias":  assigned,
+            "content":     line_msg,
+            "keyword_cat": keyword_cat,
+        }
+        try:
+            push_cmd_ok = push_event_flex(commander_id, evt_obj, liff_base_url=liff_base)
+        except Exception:
+            cmd_notify = (
+                f"✅ 【核准通知】\n"
+                f"📍 {store} · 事件 #{event_id}\n"
+                f"👤 指派：{assigned}\n"
+                f"📋 指令：{line_msg[:80]}{'...' if len(line_msg)>80 else ''}"
+            )
+            push_cmd_ok = push_message(commander_id, cmd_notify)
         logger.info(f"Push to commander {commander_id[:8]}...: {'ok' if push_cmd_ok else 'fail'}")
 
     return {
@@ -485,6 +724,282 @@ async def close_event_api(event_id: int, request: Request):
     note = body.get("note", "手動結案")
     edge_store.update_event(event_id, status="closed")
     return {"ok": True, "event_id": event_id}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 執行窗口 API（供 LIFF 頁面使用）
+# ═══════════════════════════════════════════════════════════════════
+@app.get("/api/window_list")
+async def get_window_list_api():
+    """取得執行窗口列表（供 LIFF 頁面使用）"""
+    raw = edge_store.get_setting("app_cfg_WINDOW_LIST") or "[]"
+    try:
+        names = json.loads(raw)
+    except Exception:
+        names = ["（未指派）"]
+    return {"windows": names if names else ["（未指派）"]}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# D. LIFF 頁面（LINE 內嵌瀏覽器決策介面）
+# ═══════════════════════════════════════════════════════════════════
+@app.get("/liff", response_class=HTMLResponse)
+async def liff_page(event_id: int = 0):
+    """LIFF 決策頁面（在 LINE 內嵌瀏覽器中開啟）"""
+    html = """<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>嗑肉決策系統</title>
+<script src="https://static.line-scdn.net/liff/edge/versions/2.22.3/sdk.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f0f2f5; min-height: 100vh; padding: 16px;
+    color: #222;
+  }
+  .card {
+    background: white; border-radius: 16px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+    padding: 20px; margin-bottom: 16px;
+  }
+  .header {
+    background: linear-gradient(135deg, #E63B1F, #C62828);
+    color: white; border-radius: 16px;
+    padding: 20px; margin-bottom: 16px; text-align: center;
+  }
+  .header h1 { font-size: 1.3rem; margin-bottom: 4px; }
+  .header p  { font-size: 0.85rem; opacity: 0.85; }
+  .level-badge {
+    display: inline-block; padding: 4px 14px; border-radius: 20px;
+    font-weight: bold; font-size: 0.85rem; margin-bottom: 12px;
+  }
+  .level-red    { background: #FFEBE9; color: #E74C3C; border: 1.5px solid #E74C3C; }
+  .level-yellow { background: #FFF9E6; color: #F39C12; border: 1.5px solid #F39C12; }
+  .level-blue   { background: #E8F4FD; color: #3498DB; border: 1.5px solid #3498DB; }
+  .field-label  { font-size: 0.78rem; color: #888; margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .field-value  { font-size: 0.95rem; color: #333; margin-bottom: 14px; }
+  .content-box  {
+    background: #f8f9fa; border-radius: 10px; padding: 12px 14px;
+    font-size: 0.95rem; line-height: 1.6; color: #333; margin-bottom: 14px;
+    border-left: 4px solid #3498DB;
+  }
+  select {
+    width: 100%; padding: 10px 12px; border-radius: 10px;
+    border: 1.5px solid #ddd; font-size: 0.95rem;
+    background: white; color: #333; margin-bottom: 14px;
+    appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center;
+    background-size: 12px;
+  }
+  .btn {
+    width: 100%; padding: 14px; border: none; border-radius: 12px;
+    font-size: 1rem; font-weight: bold; cursor: pointer;
+    margin-bottom: 10px; transition: all 0.2s ease;
+    letter-spacing: 0.5px;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-approve { background: #27AE60; color: white; }
+  .btn-close   { background: #E74C3C; color: white; }
+  .btn-cancel  { background: #ecf0f1; color: #555; }
+  .success-screen {
+    display: none; text-align: center; padding: 40px 20px;
+  }
+  .success-screen .icon { font-size: 4rem; margin-bottom: 16px; }
+  .success-screen h2    { font-size: 1.4rem; color: #27AE60; margin-bottom: 8px; }
+  .success-screen p     { color: #666; font-size: 0.9rem; }
+  .loading { text-align: center; padding: 40px 20px; color: #888; font-size: 1rem; }
+  .error-msg { color: #E74C3C; font-size: 0.85rem; padding: 8px 0; }
+  .separator { border: none; border-top: 1px solid #eee; margin: 16px 0; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🛡️ 嗑肉決策系統</h1>
+  <p>LINE LIFF · 即時決策介面</p>
+</div>
+
+<div id="loading-screen" class="card loading">
+  <p>⏳ 載入事件資料中...</p>
+</div>
+
+<div id="main-screen" style="display:none;">
+  <div class="card">
+    <div id="level-badge" class="level-badge"></div>
+    <div class="field-label">事件 ID</div>
+    <div id="evt-id" class="field-value"></div>
+    <div class="field-label">門店</div>
+    <div id="evt-store" class="field-value"></div>
+    <div class="field-label">回報者</div>
+    <div id="evt-user" class="field-value"></div>
+    <div class="field-label">類別</div>
+    <div id="evt-cat" class="field-value"></div>
+    <div class="field-label">事件內容</div>
+    <div id="evt-content" class="content-box"></div>
+  </div>
+
+  <div class="card">
+    <div class="field-label">指定執行窗口</div>
+    <select id="window-select"><option value="">載入中...</option></select>
+
+    <div class="field-label">目標群組（推播對象）</div>
+    <select id="group-select"><option value="">（不推播 / 保持原群組）</option></select>
+
+    <hr class="separator">
+
+    <button class="btn btn-approve" onclick="doApprove()">✅ 核准並推播</button>
+    <button class="btn btn-close"   onclick="doClose()">❌ 結案</button>
+    <button class="btn btn-cancel"  onclick="doCancel()">取消</button>
+    <div id="error-msg" class="error-msg"></div>
+  </div>
+</div>
+
+<div id="success-screen" class="success-screen card">
+  <div class="icon" id="success-icon">✅</div>
+  <h2 id="success-title">操作成功！</h2>
+  <p id="success-msg">視窗將自動關閉...</p>
+</div>
+
+<script>
+const TARGET_EVENT_ID = """ + str(event_id) + """;
+let currentEvent = null;
+let baseUrl = window.location.origin;
+
+// LIFF 初始化
+liff.init({ liffId: "placeholder" }).catch(() => {});
+
+async function loadData() {
+  try {
+    // 取得事件列表
+    const evtResp = await fetch(baseUrl + "/api/events?limit=300");
+    const evtData = await evtResp.json();
+    const events  = evtData.events || [];
+    currentEvent  = events.find(e => e.id === TARGET_EVENT_ID);
+
+    if (!currentEvent) {
+      document.getElementById("loading-screen").innerHTML =
+        "<p style='color:#E74C3C'>❌ 找不到事件 #" + TARGET_EVENT_ID + "</p>";
+      return;
+    }
+
+    // 填充事件資訊
+    const lvMap   = { red: "🔴 紅色警戒", yellow: "🟡 黃色行動", blue: "🔵 藍色任務" };
+    const lvClass = { red: "level-red", yellow: "level-yellow", blue: "level-blue" };
+    const badge   = document.getElementById("level-badge");
+    badge.textContent  = lvMap[currentEvent.level] || currentEvent.level;
+    badge.className    = "level-badge " + (lvClass[currentEvent.level] || "level-blue");
+
+    document.getElementById("evt-id").textContent      = "#" + currentEvent.id;
+    document.getElementById("evt-store").textContent   = currentEvent.store || "—";
+    document.getElementById("evt-user").textContent    = currentEvent.user_alias || currentEvent.user || "—";
+    document.getElementById("evt-cat").textContent     = currentEvent.keyword_cat || "—";
+    document.getElementById("evt-content").textContent = currentEvent.content || "（無內容）";
+
+    // 取得執行窗口列表
+    const winResp = await fetch(baseUrl + "/api/window_list");
+    const winData = await winResp.json();
+    const winSel  = document.getElementById("window-select");
+    winSel.innerHTML  = '<option value="">（請選擇執行窗口）</option>';
+    (winData.windows || []).forEach(w => {
+      const opt    = document.createElement("option");
+      opt.value    = w; opt.textContent = w;
+      winSel.appendChild(opt);
+    });
+
+    // 取得群組列表
+    const grpResp = await fetch(baseUrl + "/api/groups");
+    const grpData = await grpResp.json();
+    const grpSel  = document.getElementById("group-select");
+    grpSel.innerHTML = '<option value="">（不推播 / 保持原群組）</option>';
+    (grpData.groups || []).forEach(g => {
+      const opt    = document.createElement("option");
+      opt.value    = g.group_id;
+      opt.textContent = g.store_name + " (" + g.group_id.substring(0, 12) + "...)";
+      if (g.group_id === currentEvent.group_id) opt.selected = true;
+      grpSel.appendChild(opt);
+    });
+
+    document.getElementById("loading-screen").style.display = "none";
+    document.getElementById("main-screen").style.display    = "block";
+  } catch (err) {
+    document.getElementById("loading-screen").innerHTML =
+      "<p style='color:#E74C3C'>❌ 載入失敗：" + err.message + "</p>";
+  }
+}
+
+async function doApprove() {
+  if (!currentEvent) return;
+  const assigned = document.getElementById("window-select").value || "（未指派）";
+  const groupId  = document.getElementById("group-select").value || currentEvent.group_id || "";
+  document.getElementById("error-msg").textContent = "";
+
+  try {
+    const resp = await fetch(baseUrl + "/api/events/" + currentEvent.id + "/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        assigned_to:   assigned,
+        line_msg:      "✅ 事件 #" + currentEvent.id + " 已核准，執行窗口：" + assigned,
+        group_id:      groupId,
+        level:         currentEvent.level,
+        store:         currentEvent.store,
+        keyword_cat:   currentEvent.keyword_cat || "",
+        draft_modified: false,
+      }),
+    });
+    if (resp.ok) {
+      showSuccess("✅", "核准成功！", "事件 #" + currentEvent.id + " 已核准，指派：" + assigned);
+    } else {
+      document.getElementById("error-msg").textContent = "❌ 操作失敗（HTTP " + resp.status + "）";
+    }
+  } catch (err) {
+    document.getElementById("error-msg").textContent = "❌ 網路錯誤：" + err.message;
+  }
+}
+
+async function doClose() {
+  if (!currentEvent) return;
+  document.getElementById("error-msg").textContent = "";
+  try {
+    const resp = await fetch(baseUrl + "/api/events/" + currentEvent.id + "/close", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: "LIFF 手動結案" }),
+    });
+    if (resp.ok) {
+      showSuccess("✅", "結案成功！", "事件 #" + currentEvent.id + " 已結案。");
+    } else {
+      document.getElementById("error-msg").textContent = "❌ 操作失敗（HTTP " + resp.status + "）";
+    }
+  } catch (err) {
+    document.getElementById("error-msg").textContent = "❌ 網路錯誤：" + err.message;
+  }
+}
+
+function doCancel() {
+  try { liff.closeWindow(); } catch (e) { window.history.back(); }
+}
+
+function showSuccess(icon, title, msg) {
+  document.getElementById("main-screen").style.display    = "none";
+  document.getElementById("success-screen").style.display = "block";
+  document.getElementById("success-icon").textContent  = icon;
+  document.getElementById("success-title").textContent = title;
+  document.getElementById("success-msg").textContent   = msg;
+  setTimeout(() => {
+    try { liff.closeWindow(); } catch (e) {}
+  }, 2500);
+}
+
+// 頁面載入
+loadData();
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 if __name__ == "__main__":

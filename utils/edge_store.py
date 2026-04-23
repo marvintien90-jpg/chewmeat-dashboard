@@ -598,3 +598,21 @@ def set_setting(key: str, value: str) -> None:
                DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
             (key, value, now)
         )
+
+
+# ── 執行窗口列表 ──────────────────────────────────────────────────
+def get_window_list() -> list[str]:
+    """取得執行窗口列表；未設定時回傳 ["（未指派）"]"""
+    import json as _json
+    raw = get_setting("app_cfg_WINDOW_LIST") or "[]"
+    try:
+        lst = _json.loads(raw)
+        return lst if lst else ["（未指派）"]
+    except Exception:
+        return ["（未指派）"]
+
+
+def set_window_list(names: list[str]) -> None:
+    """儲存執行窗口列表（JSON 陣列字串）"""
+    import json as _json
+    set_setting("app_cfg_WINDOW_LIST", _json.dumps(names, ensure_ascii=False))
