@@ -28,7 +28,7 @@ services:
                                      # 升級為 Starter plan 後可改 /data/edge_agent.db 並加 disk 區塊
 
       - key: LINE_REPLY_ON_EVENT
-        value: "true"                # 收到訊息後自動回覆確認
+        value: "false"               # 靜默模式：只收訊息不回覆，避免洗版（改 true 可開啟）
 
       # ⚠️ 以下三個金鑰請在 Render Dashboard > Environment 手動填入，勿提交至 Git
       - key: LINE_CHANNEL_SECRET

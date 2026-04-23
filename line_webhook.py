@@ -62,8 +62,8 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# 是否對每筆事件自動回覆（可透過環境變數關閉）
-_REPLY_ON_EVENT = os.environ.get("LINE_REPLY_ON_EVENT", "true").lower() == "true"
+# 是否對每筆事件自動回覆（預設關閉，避免洗版；設 LINE_REPLY_ON_EVENT=true 開啟）
+_REPLY_ON_EVENT = os.environ.get("LINE_REPLY_ON_EVENT", "false").lower() == "true"
 
 # 初始化資料庫（建表 + migration）
 edge_store.init_db()
