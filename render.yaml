@@ -30,7 +30,7 @@ services:
       - key: LINE_REPLY_ON_EVENT
         value: "false"               # 靜默模式：只收訊息不回覆，避免洗版（改 true 可開啟）
 
-      # ⚠️ 以下三個金鑰請在 Render Dashboard > Environment 手動填入，勿提交至 Git
+      # ⚠️ 以下金鑰請在 Render Dashboard > Environment 手動填入，勿提交至 Git
       - key: LINE_CHANNEL_SECRET
         sync: false                  # 在 Render Dashboard 填入
 
@@ -39,6 +39,12 @@ services:
 
       - key: LINE_GROUP_STORE_MAP
         sync: false                  # JSON: {"C群組ID": "門店名"}，在 Dashboard 填入
+
+      - key: LINE_COMMANDER_USER_ID
+        sync: false                  # Commander 的個人 LINE userId（U 開頭）
+
+      - key: ANTHROPIC_API_KEY
+        sync: false                  # Claude API Key（用於 AI 起草草稿）
 
 # ── 持久磁碟（升級 Starter plan 後取消註解）────────────────────────────
 # 注意：Render free plan 不支援 disk，取消下方註解前需先升級方案
