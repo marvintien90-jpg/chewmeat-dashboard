@@ -919,39 +919,58 @@ def show_decision_sandbox(item: dict):
             "🚀 一次性核准並發送", type="primary",
             use_container_width=True, key=f"approve_{item['id']}"
         ):
-            now       = datetime.now()
-            mon_until = now + timedelta(hours=24)
-            res_dl    = (now + timedelta(hours=4)) if level == "red" else None
+            line_msg = edited.strip()
 
-            edge_store.update_event(
-                item["id"],
-                status="monitoring",
-                assigned_to=assigned,
-                monitoring_until=mon_until,
-                response_deadline=res_dl,
-            )
-            edge_store.log_decision(
-                event_id=item["id"], level=level,
-                store=item["store"], assigned_to=assigned,
-                draft_modified=(edited != raw_draft),
-                keyword_cat=keyword_cat,
-            )
+            # ── 優先走遠端 API（webhook server 更新自己的 DB + 推播）──
+            remote_ok = False
+            if _get_webhook_base_url():
+                resp = _remote_post(
+                    f"/api/events/{item['id']}/approve",
+                    body={
+                        "assigned_to":   assigned,
+                        "line_msg":      line_msg,
+                        "group_id":      group_id,
+                        "level":         level,
+                        "store":         item["store"],
+                        "keyword_cat":   keyword_cat,
+                        "draft_modified": (edited != raw_draft),
+                    },
+                    timeout=8,
+                )
+                remote_ok = resp is True
 
-            push_ok = False
-            if group_id and _HAS_LINE_UTILS:
-                line_msg = edited.strip()
-                push_ok  = _line_utils.push_message(group_id, line_msg)
+            # ── 本機 fallback（Streamlit Cloud 無遠端時仍可運作）──
+            if not remote_ok:
+                from datetime import timedelta as _td
+                now       = datetime.now()
+                mon_until = now + _td(hours=24)
+                res_dl    = (now + _td(hours=4)) if level == "red" else None
+                edge_store.update_event(
+                    item["id"],
+                    status="monitoring",
+                    assigned_to=assigned,
+                    monitoring_until=mon_until,
+                    response_deadline=res_dl,
+                )
+                edge_store.log_decision(
+                    event_id=item["id"], level=level,
+                    store=item["store"], assigned_to=assigned,
+                    draft_modified=(edited != raw_draft),
+                    keyword_cat=keyword_cat,
+                )
+                if group_id and _HAS_LINE_UTILS:
+                    _line_utils.push_message(group_id, line_msg)
 
-            if push_ok:
+            if remote_ok:
                 st.success(
-                    "✅ 指令已推播至 Line 群組！\n\n"
+                    "✅ 指令已推播至 Line 群組，同時通知總指揮！\n\n"
                     "🕒 4H 時效追蹤已啟動\n"
                     "👀 24H 觀察期已啟動\n"
                     "📊 決策紀錄已寫入責任地圖"
                 )
             elif group_id:
                 st.warning(
-                    "⚠️ Line 推播失敗（請確認 LINE_CHANNEL_ACCESS_TOKEN 已設定）\n\n"
+                    "⚠️ 遠端 API 失敗，已用本機模式儲存\n\n"
                     "✅ 資料庫狀態已更新為 MONITORING"
                 )
             else:

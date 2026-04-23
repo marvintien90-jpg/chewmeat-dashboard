@@ -367,6 +367,97 @@ async def delete_group_api(group_id: str):
     return {"ok": True, "group_id": group_id}
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 事件核准 API（供 Streamlit Cloud 遠端更新 webhook server DB）
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/events/{event_id}/approve")
+async def approve_event_api(event_id: int, request: Request):
+    """
+    Streamlit Cloud 核准事件 → 更新 webhook server 的 SQLite DB。
+    同步：
+      1. 將事件狀態改為 monitoring
+      2. 記錄決策 log
+      3. 推播任務指令到 LINE 群組（group_id）
+      4. 推播核准通知到 Commander（LINE_COMMANDER_USER_ID）
+    Body:
+      {
+        "assigned_to": "負責人",
+        "line_msg": "任務指令全文",
+        "group_id": "Cxxx",          // 推播目標群組
+        "level": "blue|yellow|red",
+        "store": "門店名",
+        "keyword_cat": "分類",
+        "draft_modified": false
+      }
+    """
+    from datetime import timedelta
+    body = await request.json()
+    assigned    = body.get("assigned_to", "").strip()
+    line_msg    = body.get("line_msg", "").strip()
+    group_id    = body.get("group_id", "").strip()
+    level       = body.get("level", "blue")
+    store       = body.get("store", "")
+    keyword_cat = body.get("keyword_cat", "")
+    draft_mod   = body.get("draft_modified", False)
+
+    now       = datetime.now()
+    mon_until = now + timedelta(hours=24)
+    res_dl    = (now + timedelta(hours=4)) if level == "red" else None
+
+    # 1. 更新事件狀態
+    edge_store.update_event(
+        event_id,
+        status="monitoring",
+        assigned_to=assigned,
+        monitoring_until=mon_until,
+        response_deadline=res_dl,
+    )
+
+    # 2. 決策 log
+    edge_store.log_decision(
+        event_id=event_id, level=level,
+        store=store, assigned_to=assigned,
+        draft_modified=draft_mod,
+        keyword_cat=keyword_cat,
+    )
+
+    push_group_ok = False
+    push_cmd_ok   = False
+
+    # 3. 推播任務指令到群組
+    if group_id and line_msg:
+        push_group_ok = push_message(group_id, line_msg)
+        logger.info(f"Push to group {group_id[:8]}...: {'ok' if push_group_ok else 'fail'}")
+
+    # 4. 推播核准通知到 Commander 個人 LINE
+    commander_id = os.environ.get("LINE_COMMANDER_USER_ID", "")
+    if commander_id and line_msg:
+        cmd_notify = (
+            f"✅ 【核准通知】\n"
+            f"📍 {store} · 事件 #{event_id}\n"
+            f"👤 指派：{assigned}\n"
+            f"📋 指令：{line_msg[:80]}{'...' if len(line_msg)>80 else ''}"
+        )
+        push_cmd_ok = push_message(commander_id, cmd_notify)
+        logger.info(f"Push to commander {commander_id[:8]}...: {'ok' if push_cmd_ok else 'fail'}")
+
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "push_group": push_group_ok,
+        "push_commander": push_cmd_ok,
+    }
+
+
+@app.post("/api/events/{event_id}/close")
+async def close_event_api(event_id: int, request: Request):
+    """手動結案 API"""
+    body = await request.json()
+    note = body.get("note", "手動結案")
+    edge_store.update_event(event_id, status="closed")
+    return {"ok": True, "event_id": event_id}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("line_webhook:app", host="0.0.0.0", port=8000, reload=True)
