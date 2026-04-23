@@ -1927,7 +1927,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
                         if wc2.button("✕", key=f"del_win_{wname}_{row_start}_{idx}",
                                       help=f"刪除 {wname}"):
                             new_list = [w for w in real_windows if w != wname]
-                            edge_store.set_window_list(new_list if new_list else [])
+                            edge_store.set_setting("app_cfg_WINDOW_LIST", json.dumps(new_list if new_list else [], ensure_ascii=False))
                             st.toast(f"✅ 已刪除執行窗口：{wname}")
                             st.rerun()
 
@@ -1945,7 +1945,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
             if name:
                 if name not in real_windows:
                     new_list = real_windows + [name]
-                    edge_store.set_window_list(new_list)
+                    edge_store.set_setting("app_cfg_WINDOW_LIST", json.dumps(new_list, ensure_ascii=False))
                     st.toast(f"✅ 已新增執行窗口：{name}")
                     st.rerun()
                 else:
@@ -1972,7 +1972,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
                     cur_ws.append(s)
                     added.append(s)
             if added:
-                edge_store.set_window_list(cur_ws)
+                edge_store.set_setting("app_cfg_WINDOW_LIST", json.dumps(cur_ws, ensure_ascii=False))
                 st.success(f"✅ 已批次新增 {len(added)} 位執行窗口：{', '.join(added[:5])}{'…' if len(added) > 5 else ''}")
                 st.rerun()
             else:
@@ -1981,7 +1981,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
         if real_windows:
             st.divider()
             if st.button("🗑️ 清空所有執行窗口", key="clear_all_windows_btn", type="secondary"):
-                edge_store.set_window_list([])
+                edge_store.set_setting("app_cfg_WINDOW_LIST", json.dumps([], ensure_ascii=False))
                 st.toast("✅ 執行窗口名單已清空")
                 st.rerun()
 
