@@ -845,22 +845,24 @@ def render_avatar_bubble(item: dict):
             f'🤖 {close_note}於 {ac_time}</span>'
         )
 
-    st.markdown(f"""
-<div class="chat-bubble {bg_cls}">
-    <div class="avatar">{avatar_ch}</div>
-    <div style="flex:1;">
-        {status_banner}
-        <div style="margin-bottom:6px;">
-            <span class="store-tag">🏷️ {item['store']}</span>
-            <span class="store-tag">👤 {user_name}</span>
-            {cat_html}
-        </div>
-        <div style="font-size:14px;color:#333;margin-bottom:6px;line-height:1.5;">{item['content']}</div>
-        <div style="font-size:12px;color:#888;">{time_html}</div>
-        {ai_close_html}
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    # 注意：f-string 內不能有空行，否則 Streamlit markdown 切換段落模式導致 HTML 被當純文字
+    html = (
+        f'<div class="chat-bubble {bg_cls}">'
+        f'<div class="avatar">{avatar_ch}</div>'
+        f'<div style="flex:1;">'
+        f'{status_banner}'
+        f'<div style="margin-bottom:6px;">'
+        f'<span class="store-tag">🏷️ {item["store"]}</span>'
+        f'<span class="store-tag">👤 {user_name}</span>'
+        f'{cat_html}'
+        f'</div>'
+        f'<div style="font-size:14px;color:#333;margin-bottom:6px;line-height:1.5;">{item["content"]}</div>'
+        f'<div style="font-size:12px;color:#888;">{time_html}</div>'
+        f'{ai_close_html}'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
     if status == "pending":
         if st.button("🎯 開啟決策沙盒", key=f"open_{item['id']}", use_container_width=True):
