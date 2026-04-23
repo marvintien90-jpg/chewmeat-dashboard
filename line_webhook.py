@@ -49,6 +49,7 @@ from utils.line_utils import (
     push_message,
     get_user_display_name,
     push_event_flex,
+    push_resolution_flex,
     push_with_quick_reply,
 )
 
@@ -75,6 +76,12 @@ logger.info(f"Edge DB ready: {os.environ.get('EDGE_DB_PATH', '/tmp/edge_agent.db
 # 名稱快取 TTL：同一 user_id 在 TTL 秒內不重複呼叫 LINE API
 _NAME_CACHE_TTL = 3600  # 1 小時
 _name_cache: dict[str, tuple[str, float]] = {}  # {user_id: (name, timestamp)}
+
+# AI 起草暫存：{event_id: draft_text}（記憶體，重啟後清空）
+_pending_drafts: dict[int, str] = {}
+
+# 信心度推播門檻（低於此值靜默存檔，不推 Commander）
+_CONFIDENCE_THRESHOLD = 0.6
 
 
 def _get_cached_display_name(user_id: str, group_id: str = "") -> str:
@@ -232,19 +239,45 @@ def _handle_event(event: dict) -> Optional[dict]:
     # ── 3. 用戶顯示名稱（LINE 真實名稱 → 快取 → fallback ID 後綴）──
     user_alias = _get_cached_display_name(line_user_id, group_id)
 
-    # ── 4. 確認語意 → 自動結案 ───────────────────────────────────
+    # ── 4. 確認語意 → 推播「建議結案」卡片給 Commander（非自動結案）
     if edge_nlp.is_confirmation(text):
-        closed_n = edge_store.auto_close_confirmation_for_store(store)
         edge_store.mark_webhook_processed(wh_id)
-        logger.info(f"Confirmation: closed {closed_n} monitoring event(s) for {store}")
+        logger.info(f"Confirmation detected from {store}: {text[:40]}")
 
-        if _REPLY_ON_EVENT and reply_token:
-            send_reply(reply_token, f"✅ 已收到確認！{store} 的相關事件已結案。")
+        # 找到該門店最近一筆 pending/monitoring 事件
+        evts       = edge_store.load_events(limit=100)
+        target_evt = next(
+            (e for e in evts
+             if e.get("store") == store
+             and e.get("status") in ("pending", "monitoring")),
+            None,
+        )
 
-        return {"type": "confirmation", "store": store, "closed": closed_n}
+        if target_evt and commander_id:
+            try:
+                push_resolution_flex(
+                    commander_id,
+                    target_evt,
+                    confirm_user  = user_alias,
+                    confirm_text  = text,
+                )
+                logger.info(f"Suggested closure of event #{target_evt['id']} to commander")
+            except Exception as e:
+                logger.warning(f"push_resolution_flex failed: {e}")
 
-    # ── 5. NLP 分類 ──────────────────────────────────────────────
-    level, keyword_cat = edge_nlp.classify_v2(text)
+        return {"type": "confirmation", "store": store,
+                "suggest_close": target_evt.get("id") if target_evt else None}
+
+    # ── 5. NLP 分類 + 信心度評分 ─────────────────────────────────
+    level, keyword_cat, confidence = edge_nlp.classify_with_confidence(text)
+
+    # 信心度不足 → 靜默存檔，不推播 Commander
+    if confidence < _CONFIDENCE_THRESHOLD:
+        edge_store.mark_webhook_processed(wh_id)
+        logger.info(
+            f"Low confidence ({confidence:.2f}) event from {store}, silently archived: {text[:40]}"
+        )
+        return {"type": "low_confidence", "store": store, "confidence": confidence}
 
     # ── 6. 5 分鐘合併窗口 ────────────────────────────────────────
     merge_id = edge_store.find_merge_candidate(store, user_alias, level)
@@ -270,7 +303,10 @@ def _handle_event(event: dict) -> Optional[dict]:
         "group_id":    group_id,     # v4：記錄來源群組，核准時逆向推播用
     })
     edge_store.mark_webhook_processed(wh_id)
-    logger.info(f"New event #{new_id} [{level}/{keyword_cat}] {store}: {text[:40]}")
+    logger.info(
+        f"New event #{new_id} [{level}/{keyword_cat}] conf={confidence:.2f} "
+        f"{store}: {text[:40]}"
+    )
 
     # ── 8. 回覆確認 ──────────────────────────────────────────────
     if _REPLY_ON_EVENT and reply_token:
@@ -284,7 +320,7 @@ def _handle_event(event: dict) -> Optional[dict]:
         )
         send_reply(reply_token, reply_tx)
 
-    # ── 9. 推播 Flex Message 給 Commander（帶 LIFF 按鈕）─────────
+    # ── 9. 推播 Flex Message 給 Commander（帶信心度 + 新按鈕）────
     if commander_id:
         liff_base = os.environ.get("LIFF_URL", "").strip()
         if not liff_base:
@@ -298,6 +334,7 @@ def _handle_event(event: dict) -> Optional[dict]:
             "user_alias":  user_alias,
             "content":     text,
             "keyword_cat": keyword_cat,
+            "confidence":  confidence,   # v2：傳入信心度供 Flex 卡顯示
         }
         try:
             push_event_flex(commander_id, evt_obj, liff_base_url=liff_base)
@@ -316,17 +353,23 @@ def _handle_event(event: dict) -> Optional[dict]:
 # ═══════════════════════════════════════════════════════════════════
 # A. Commander 指令型控制
 # ═══════════════════════════════════════════════════════════════════
-_CMD_RE = re.compile(r'(核准|結案|拒絕|轉傳)\s*#?(\d+)(?:\s+(.+))?')
+_CMD_RE = re.compile(
+    r'(核准|結案|拒絕|轉傳|發送|取消|轉派)\s*#?(\d+)(?:\s+(.+))?'
+)
 
 
 def _handle_commander_command(text: str, reply_token: str) -> Optional[dict]:
     """
     解析 Commander 發送的文字指令並執行。
-    格式：
-      核准 #8          → 核准事件 8
-      核准 #8 張窗口   → 核准事件 8，指派窗口為「張窗口」
-      結案 #8          → 結案事件 8
-      轉傳 #8 崇德店   → 核准事件 8 並改推播到崇德店對應群組
+    支援格式：
+      核准 #8            → 核准事件 8
+      核准 #8 張窗口     → 核准事件 8，指派窗口為「張窗口」
+      結案 #8            → 結案事件 8
+      轉傳 #8 崇德店     → 核准事件 8 並改推播到崇德店對應群組
+      發送 #8            → 發送 _pending_drafts[8] 存的 AI 草稿
+      發送 #8 [修改版]   → 發送修改後的文字（取代草稿）
+      取消 #8            → 取消草稿（不發送）
+      轉派 #8 張窗口     → 重新起草指派版本給張窗口並推播
     回傳 None 表示不是指令（交由後續正常流程處理）。
     """
     m = _CMD_RE.search(text)
@@ -339,14 +382,13 @@ def _handle_commander_command(text: str, reply_token: str) -> Optional[dict]:
 
     commander_id = os.environ.get("LINE_COMMANDER_USER_ID", "").strip()
 
+    # ── 核准 ───────────────────────────────────────────────────────
     if action == "核准":
-        # 取得事件資料
         evts = edge_store.load_events(limit=300)
         evt  = next((e for e in evts if e.get("id") == event_id), None)
         if not evt:
-            msg = f"❌ 找不到事件 #{event_id}"
             if commander_id:
-                push_message(commander_id, msg)
+                push_message(commander_id, f"❌ 找不到事件 #{event_id}")
             return {"type": "cmd_error", "event_id": event_id, "reason": "not_found"}
 
         assigned = param or "（未指派）"
@@ -356,19 +398,13 @@ def _handle_commander_command(text: str, reply_token: str) -> Optional[dict]:
         mon_until = now + timedelta(hours=24)
         res_dl    = (now + timedelta(hours=4)) if evt.get("level") == "red" else None
         edge_store.update_event(
-            event_id,
-            status="monitoring",
-            assigned_to=assigned,
-            monitoring_until=mon_until,
-            response_deadline=res_dl,
+            event_id, status="monitoring", assigned_to=assigned,
+            monitoring_until=mon_until, response_deadline=res_dl,
         )
         edge_store.log_decision(
-            event_id=event_id,
-            level=evt.get("level", "blue"),
-            store=evt.get("store", ""),
-            assigned_to=assigned,
-            draft_modified=False,
-            keyword_cat=evt.get("keyword_cat", ""),
+            event_id=event_id, level=evt.get("level", "blue"),
+            store=evt.get("store", ""), assigned_to=assigned,
+            draft_modified=False, keyword_cat=evt.get("keyword_cat", ""),
         )
         if group_id:
             push_message(group_id, f"✅ 事件 #{event_id} 已核准，執行窗口：{assigned}")
@@ -377,21 +413,90 @@ def _handle_commander_command(text: str, reply_token: str) -> Optional[dict]:
         logger.info(f"Commander approved event #{event_id} -> {assigned}")
         return {"type": "cmd_approve", "event_id": event_id, "assigned": assigned}
 
+    # ── 結案 ───────────────────────────────────────────────────────
     elif action == "結案":
         edge_store.update_event(event_id, status="closed")
+        _pending_drafts.pop(event_id, None)
         if commander_id:
             push_message(commander_id, f"✅ 事件 #{event_id} 已結案")
         logger.info(f"Commander closed event #{event_id}")
         return {"type": "cmd_close", "event_id": event_id}
 
+    # ── 拒絕 ───────────────────────────────────────────────────────
     elif action == "拒絕":
         edge_store.update_event(event_id, status="closed")
+        _pending_drafts.pop(event_id, None)
         if commander_id:
             push_message(commander_id, f"✅ 事件 #{event_id} 已拒絕並結案")
         return {"type": "cmd_reject", "event_id": event_id}
 
-    elif action == "轉傳":
-        # param = 門店名，找對應群組
+    # ── 發送 草稿（有或無修改版）────────────────────────────────
+    elif action == "發送":
+        evts = edge_store.load_events(limit=300)
+        evt  = next((e for e in evts if e.get("id") == event_id), None)
+        if not evt:
+            if commander_id:
+                push_message(commander_id, f"❌ 找不到事件 #{event_id}")
+            return {"type": "cmd_error", "event_id": event_id, "reason": "not_found"}
+
+        # param 有值時為修改版，否則用原草稿
+        draft_text = param if param else _pending_drafts.get(event_id, "")
+        if not draft_text:
+            if commander_id:
+                push_message(
+                    commander_id,
+                    f"❌ 事件 #{event_id} 沒有待發草稿，請先點「📝 AI起草」"
+                )
+            return {"type": "cmd_error", "event_id": event_id, "reason": "no_draft"}
+
+        group_id     = evt.get("group_id", "")
+        draft_mod    = bool(param)  # 有修改過
+        from datetime import timedelta
+        now       = datetime.now()
+        mon_until = now + timedelta(hours=24)
+        res_dl    = (now + timedelta(hours=4)) if evt.get("level") == "red" else None
+
+        # 推播到群組
+        push_ok = False
+        if group_id:
+            push_ok = push_message(group_id, draft_text)
+
+        # 更新事件狀態
+        edge_store.update_event(
+            event_id, status="monitoring", assigned_to="Commander 指令",
+            monitoring_until=mon_until, response_deadline=res_dl,
+        )
+        edge_store.log_decision(
+            event_id=event_id, level=evt.get("level", "blue"),
+            store=evt.get("store", ""), assigned_to="Commander 指令",
+            draft_modified=draft_mod, keyword_cat=evt.get("keyword_cat", ""),
+        )
+        _pending_drafts.pop(event_id, None)
+
+        if commander_id:
+            status_emoji = "✅" if push_ok else "⚠️"
+            push_message(
+                commander_id,
+                f"{status_emoji} 事件 #{event_id} 草稿已發送到群組"
+                + ("（已修改版）" if draft_mod else "")
+            )
+        logger.info(
+            f"Commander sent draft for event #{event_id}, modified={draft_mod}"
+        )
+        return {"type": "cmd_send", "event_id": event_id, "draft_modified": draft_mod}
+
+    # ── 取消 草稿 ─────────────────────────────────────────────────
+    elif action == "取消":
+        dropped = _pending_drafts.pop(event_id, None)
+        if commander_id:
+            if dropped:
+                push_message(commander_id, f"✅ 事件 #{event_id} 草稿已取消")
+            else:
+                push_message(commander_id, f"ℹ️ 事件 #{event_id} 沒有待取消的草稿")
+        return {"type": "cmd_cancel_draft", "event_id": event_id, "had_draft": bool(dropped)}
+
+    # ── 轉傳 / 轉派 ──────────────────────────────────────────────
+    elif action in ("轉傳", "轉派"):
         evts = edge_store.load_events(limit=300)
         evt  = next((e for e in evts if e.get("id") == event_id), None)
         if not evt:
@@ -401,7 +506,6 @@ def _handle_commander_command(text: str, reply_token: str) -> Optional[dict]:
 
         target_group = ""
         if param:
-            # 從 line_groups 找對應門店
             groups = edge_store.load_line_groups()
             for g in groups:
                 if g.get("store_name") == param:
@@ -414,24 +518,103 @@ def _handle_commander_command(text: str, reply_token: str) -> Optional[dict]:
         edge_store.update_event(event_id, status="monitoring",
                                 monitoring_until=mon_until)
         edge_store.log_decision(
-            event_id=event_id,
-            level=evt.get("level", "blue"),
-            store=evt.get("store", ""),
-            assigned_to="轉傳",
-            draft_modified=False,
-            keyword_cat=evt.get("keyword_cat", ""),
+            event_id=event_id, level=evt.get("level", "blue"),
+            store=evt.get("store", ""), assigned_to=f"轉派:{param}",
+            draft_modified=False, keyword_cat=evt.get("keyword_cat", ""),
         )
+
+        # 嘗試 AI 起草指派版本
         if target_group:
-            push_message(target_group,
-                         f"📢 轉傳事件 #{event_id}：{evt.get('content','')[:80]}")
+            delegate_text = (
+                f"📢 【{evt.get('store','')}→{param}】轉派任務\n"
+                f"事件 #{event_id}：{evt.get('content','')[:80]}\n"
+                f"請 {param} 接手處理，回覆「搞定 #{event_id}」後結案。"
+            )
+            push_message(target_group, delegate_text)
         if commander_id:
             push_message(
                 commander_id,
-                f"✅ 事件 #{event_id} 已轉傳至 {param}（群組 {target_group[:12] if target_group else '未找到'}）"
+                f"✅ 事件 #{event_id} 已轉派至 {param}"
+                + (f"（群組 {target_group[:12]}...）" if target_group else "（未找到對應群組）")
             )
         return {"type": "cmd_forward", "event_id": event_id, "target": param}
 
     return None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AI 草稿生成
+# ═══════════════════════════════════════════════════════════════════
+def _generate_ai_draft(evt: dict) -> str:
+    """
+    呼叫 Claude API（claude-haiku）為事件生成任務指令草稿。
+    失敗時回傳預設模板。
+    """
+    level      = evt.get("level", "blue")
+    store      = evt.get("store", "")
+    content    = evt.get("content", "")
+    keyword_cat = evt.get("keyword_cat", "")
+    event_id   = evt.get("id", 0)
+
+    emoji_map  = {"red": "🔴", "yellow": "🟡", "blue": "🔵"}
+    emoji      = emoji_map.get(level, "🔵")
+    cat_cn     = {"red-equipment": "設備故障", "red-temperature": "溫度異常",
+                  "red-power": "電力異常", "red-safety": "安全事故",
+                  "red-other": "緊急事件", "yellow-staffing": "人力支援",
+                  "yellow-material": "物料協助", "yellow-delivery": "配送調度",
+                  "blue-inventory": "庫存盤點", "blue-task": "例行任務",
+                  "blue-report": "回報確認"}.get(keyword_cat, "現場事件")
+
+    # 預設模板（API 失敗時 fallback）
+    fallback = (
+        f"{emoji} 【{cat_cn}任務指令】\n"
+        f"📍 {store}  事件 #{event_id}\n"
+        f"📋 事項：{content}\n"
+        f"✅ 請立即處理並於完成後回覆「搞定 #{event_id}」"
+    )
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return fallback
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+
+        urgency = {"red": "緊急（1 小時內）", "yellow": "盡快（4 小時內）",
+                   "blue": "今日內"}.get(level, "今日內")
+
+        system_prompt = (
+            "你是「嗑肉餐飲」的現場指令助理。請根據門店回報的訊息，"
+            "生成一條簡潔清晰的繁體中文任務指令，供門店主管下達給現場人員。\n"
+            "要求：\n"
+            "1. 開頭加分類 emoji\n"
+            "2. 說明任務性質與具體行動\n"
+            "3. 末行加「完成後回覆：搞定 #<event_id>」\n"
+            "4. 整體不超過 100 字\n"
+            "5. 只輸出任務指令本身，不要說明或前言"
+        )
+        user_msg = (
+            f"門店：{store}\n"
+            f"類別：{cat_cn}\n"
+            f"事件 ID：#{event_id}\n"
+            f"回報內容：{content}\n"
+            f"緊急程度：{urgency}"
+        )
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=200,
+            messages=[{"role": "user", "content": user_msg}],
+            system=system_prompt,
+        )
+        draft = resp.content[0].text.strip() if resp.content else fallback
+        logger.info(f"AI draft generated for event #{event_id}: {draft[:60]}")
+        return draft
+
+    except Exception as e:
+        logger.warning(f"_generate_ai_draft failed: {e}")
+        return fallback
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -440,20 +623,132 @@ def _handle_commander_command(text: str, reply_token: str) -> Optional[dict]:
 def _handle_postback(data: str, user_id: str) -> Optional[dict]:
     """
     處理 LINE postback 事件。
-    支援：
-      approve:<event_id>  → 核准事件
-      close:<event_id>    → 結案事件
+    支援 action 類型：
+      draft:<id>        → AI 起草回覆草稿，私訊 Commander
+      observe:<id>      → 列入觀察（記錄不回應）
+      dismiss:<id>      → 略過（標記為 closed）
+      delegate:<id>     → 轉派提示（提示 Commander 發送「轉派 #N 窗口名」）
+      close_confirm:<id>→ Commander 確認結案（建議結案卡後確認）
+      keep_observe:<id> → 繼續觀察（不結案）
+      approve:<id>      → 舊版相容：直接核准
+      close:<id>        → 舊版相容：直接結案
     """
     commander_id = os.environ.get("LINE_COMMANDER_USER_ID", "").strip()
 
-    if data.startswith("approve:"):
+    def _get_event(eid: int):
+        evts = edge_store.load_events(limit=300)
+        return next((e for e in evts if e.get("id") == eid), None)
+
+    def _parse_id(raw: str) -> Optional[int]:
         try:
-            event_id = int(data.split(":", 1)[1])
+            return int(raw.split(":", 1)[1])
         except (ValueError, IndexError):
             return None
 
-        evts = edge_store.load_events(limit=300)
-        evt  = next((e for e in evts if e.get("id") == event_id), None)
+    # ── 📝 AI 起草回覆 ────────────────────────────────────────────
+    if data.startswith("draft:"):
+        event_id = _parse_id(data)
+        if event_id is None:
+            return None
+        evt = _get_event(event_id)
+        if not evt:
+            if commander_id:
+                push_message(commander_id, f"❌ 找不到事件 #{event_id}")
+            return {"type": "postback_error", "event_id": event_id}
+
+        if commander_id:
+            push_message(commander_id, f"⏳ 正在為事件 #{event_id} 生成 AI 草稿…")
+
+        draft = _generate_ai_draft(evt)
+        _pending_drafts[event_id] = draft
+
+        if commander_id:
+            push_message(
+                commander_id,
+                f"📝 事件 #{event_id} AI 草稿：\n\n"
+                f"{draft}\n\n"
+                f"───────────────\n"
+                f"發送：回覆「發送 #{event_id}」\n"
+                f"修改：回覆「發送 #{event_id} [修改版文字]」\n"
+                f"取消：回覆「取消 #{event_id}」\n"
+                f"轉派：回覆「轉派 #{event_id} 窗口名稱」"
+            )
+        logger.info(f"Postback draft generated for event #{event_id}")
+        return {"type": "postback_draft", "event_id": event_id}
+
+    # ── 👀 列入觀察 ───────────────────────────────────────────────
+    elif data.startswith("observe:"):
+        event_id = _parse_id(data)
+        if event_id is None:
+            return None
+        edge_store.update_event(event_id, status="monitoring")
+        if commander_id:
+            push_message(commander_id, f"👀 事件 #{event_id} 已列入觀察（不回應現場）")
+        logger.info(f"Postback observe event #{event_id}")
+        return {"type": "postback_observe", "event_id": event_id}
+
+    # ── 🔕 略過 ───────────────────────────────────────────────────
+    elif data.startswith("dismiss:"):
+        event_id = _parse_id(data)
+        if event_id is None:
+            return None
+        edge_store.update_event(event_id, status="closed")
+        _pending_drafts.pop(event_id, None)
+        if commander_id:
+            push_message(commander_id, f"🔕 事件 #{event_id} 已略過（直接結案）")
+        logger.info(f"Postback dismiss event #{event_id}")
+        return {"type": "postback_dismiss", "event_id": event_id}
+
+    # ── 🔁 轉派提示 ──────────────────────────────────────────────
+    elif data.startswith("delegate:"):
+        event_id = _parse_id(data)
+        if event_id is None:
+            return None
+        # 取得可用窗口名單提示
+        raw = edge_store.get_setting("app_cfg_WINDOW_LIST") or "[]"
+        try:
+            windows = json.loads(raw)
+        except Exception:
+            windows = []
+        win_hint = "、".join(windows[:5]) if windows else "（尚未設定執行窗口）"
+        if commander_id:
+            push_message(
+                commander_id,
+                f"🔁 事件 #{event_id} — 轉派指令格式：\n"
+                f"「轉派 #{event_id} [窗口名稱]」\n\n"
+                f"目前執行窗口：{win_hint}"
+            )
+        return {"type": "postback_delegate", "event_id": event_id}
+
+    # ── ✅ 建議結案確認 ───────────────────────────────────────────
+    elif data.startswith("close_confirm:"):
+        event_id = _parse_id(data)
+        if event_id is None:
+            return None
+        edge_store.update_event(event_id, status="closed")
+        _pending_drafts.pop(event_id, None)
+        if commander_id:
+            push_message(commander_id, f"✅ 事件 #{event_id} 已確認結案")
+        logger.info(f"Postback close_confirm event #{event_id}")
+        return {"type": "postback_close_confirm", "event_id": event_id}
+
+    # ── 👀 繼續觀察（建議結案卡－否決）──────────────────────────
+    elif data.startswith("keep_observe:"):
+        event_id = _parse_id(data)
+        if event_id is None:
+            return None
+        edge_store.update_event(event_id, status="monitoring")
+        if commander_id:
+            push_message(commander_id, f"👀 事件 #{event_id} 繼續觀察中（未結案）")
+        logger.info(f"Postback keep_observe event #{event_id}")
+        return {"type": "postback_keep_observe", "event_id": event_id}
+
+    # ── 舊版相容：approve / close ────────────────────────────────
+    elif data.startswith("approve:"):
+        event_id = _parse_id(data)
+        if event_id is None:
+            return None
+        evt = _get_event(event_id)
         if not evt:
             if commander_id:
                 push_message(commander_id, f"❌ 找不到事件 #{event_id}")
@@ -464,19 +759,13 @@ def _handle_postback(data: str, user_id: str) -> Optional[dict]:
         mon_until = now + timedelta(hours=24)
         res_dl    = (now + timedelta(hours=4)) if evt.get("level") == "red" else None
         edge_store.update_event(
-            event_id,
-            status="monitoring",
-            assigned_to="（Postback 核准）",
-            monitoring_until=mon_until,
-            response_deadline=res_dl,
+            event_id, status="monitoring", assigned_to="（Postback 核准）",
+            monitoring_until=mon_until, response_deadline=res_dl,
         )
         edge_store.log_decision(
-            event_id=event_id,
-            level=evt.get("level", "blue"),
-            store=evt.get("store", ""),
-            assigned_to="（Postback 核准）",
-            draft_modified=False,
-            keyword_cat=evt.get("keyword_cat", ""),
+            event_id=event_id, level=evt.get("level", "blue"),
+            store=evt.get("store", ""), assigned_to="（Postback 核准）",
+            draft_modified=False, keyword_cat=evt.get("keyword_cat", ""),
         )
         group_id = evt.get("group_id", "")
         if group_id:
@@ -487,12 +776,11 @@ def _handle_postback(data: str, user_id: str) -> Optional[dict]:
         return {"type": "postback_approve", "event_id": event_id}
 
     elif data.startswith("close:"):
-        try:
-            event_id = int(data.split(":", 1)[1])
-        except (ValueError, IndexError):
+        event_id = _parse_id(data)
+        if event_id is None:
             return None
-
         edge_store.update_event(event_id, status="closed")
+        _pending_drafts.pop(event_id, None)
         if commander_id:
             push_message(commander_id, f"✅ 事件 #{event_id} 已透過 Postback 結案。")
         logger.info(f"Postback closed event #{event_id} by user {user_id[:8]}")

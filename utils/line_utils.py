@@ -264,122 +264,313 @@ def push_with_quick_reply(to: str, text: str, event_id: int) -> bool:
 
 
 def push_event_flex(to: str, event: dict, liff_base_url: str = "") -> bool:
-    """推播 Flex Message 決策卡片"""
+    """
+    推播 Flex Message 決策卡片（v2：新按鈕設計）
+    按鈕：[📝 AI起草回覆] [👀 列入觀察] [🔕 略過] + 第二列 [🔁 轉派] [📱 LIFF（可選）]
+    """
     if not to:
         return False
-    event_id = event.get("id", 0)
-    level    = event.get("level", "blue")
-    store    = event.get("store", "")
-    content  = event.get("content", "")[:60]
-    user     = event.get("user_alias", "") or event.get("user", "")
-    cat      = event.get("keyword_cat", "")
+    event_id   = event.get("id", 0)
+    level      = event.get("level", "blue")
+    store      = event.get("store", "")
+    content    = event.get("content", "")[:60]
+    user       = event.get("user_alias", "") or event.get("user", "")
+    cat        = event.get("keyword_cat", "")
+    confidence = event.get("confidence", None)   # 0.0~1.0，可選
 
     color_map = {"red": "#E74C3C", "yellow": "#F39C12", "blue": "#3498DB"}
     color     = color_map.get(level, "#3498DB")
     emoji_map = {"red": "🔴", "yellow": "🟡", "blue": "🔵"}
     emoji     = emoji_map.get(level, "🔵")
 
-    footer_contents = [
+    # 信心度文字（若有）
+    conf_text = ""
+    if confidence is not None:
+        pct = int(confidence * 100)
+        bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+        conf_text = f"信心度：{bar} {pct}%"
+
+    # ── 第一列按鈕：AI起草 / 觀察 / 略過 ─────────────────────────
+    row1 = [
         {
             "type": "button",
             "action": {
-                "type": "postback",
-                "label": "✅ 核准",
-                "data": f"approve:{event_id}",
-                "displayText": f"✅ 核准 #{event_id}",
+                "type":        "postback",
+                "label":       "📝 AI起草",
+                "data":        f"draft:{event_id}",
+                "displayText": f"📝 AI起草回覆 #{event_id}",
             },
             "style": "primary",
-            "color": "#27AE60",
+            "color": "#2471A3",
+            "height": "sm",
+            "flex": 2,
+        },
+        {
+            "type": "button",
+            "action": {
+                "type":        "postback",
+                "label":       "👀 觀察",
+                "data":        f"observe:{event_id}",
+                "displayText": f"👀 列入觀察 #{event_id}",
+            },
+            "style": "secondary",
+            "height": "sm",
             "flex": 1,
         },
         {
             "type": "button",
             "action": {
-                "type": "postback",
-                "label": "❌ 結案",
-                "data": f"close:{event_id}",
-                "displayText": f"❌ 結案 #{event_id}",
+                "type":        "postback",
+                "label":       "🔕 略過",
+                "data":        f"dismiss:{event_id}",
+                "displayText": f"🔕 略過 #{event_id}",
             },
-            "style": "primary",
-            "color": "#E74C3C",
+            "style": "secondary",
+            "height": "sm",
+            "flex": 1,
+        },
+    ]
+
+    # ── 第二列按鈕：轉派 + LIFF（可選）──────────────────────────
+    row2 = [
+        {
+            "type": "button",
+            "action": {
+                "type":        "postback",
+                "label":       "🔁 轉派他人",
+                "data":        f"delegate:{event_id}",
+                "displayText": f"🔁 轉派 #{event_id}",
+            },
+            "style": "secondary",
+            "height": "sm",
             "flex": 1,
         },
     ]
     if liff_base_url:
         liff_url = f"{liff_base_url}?event_id={event_id}"
-        footer_contents.append({
+        row2.append({
             "type": "button",
-            "action": {"type": "uri", "label": "📱 LIFF", "uri": liff_url},
+            "action": {"type": "uri", "label": "📱 詳細介面", "uri": liff_url},
             "style": "secondary",
+            "height": "sm",
             "flex": 1,
         })
 
+    # ── body contents ─────────────────────────────────────────────
+    body_contents: list[dict] = [
+        {
+            "type":  "text",
+            "text":  content or "（無內容）",
+            "wrap":  True,
+            "size":  "md",
+            "color": "#333333",
+        },
+        {"type": "separator", "margin": "md"},
+        {
+            "type":   "text",
+            "text":   f"類別：{cat}",
+            "size":   "xs",
+            "color":  "#888888",
+            "margin": "md",
+        },
+    ]
+    if conf_text:
+        body_contents.append({
+            "type":   "text",
+            "text":   conf_text,
+            "size":   "xs",
+            "color":  "#AAAAAA",
+            "margin": "xs",
+        })
+
     flex_msg = {
-        "type": "flex",
+        "type":    "flex",
         "altText": f"{emoji} 事件 #{event_id}｜{store}｜{content[:30]}",
         "contents": {
             "type": "bubble",
             "size": "mega",
             "header": {
-                "type": "box",
-                "layout": "vertical",
+                "type":            "box",
+                "layout":          "vertical",
                 "backgroundColor": color,
-                "paddingAll": "16px",
+                "paddingAll":      "16px",
                 "contents": [
                     {
-                        "type": "text",
-                        "text": f"{emoji} 事件 #{event_id}",
-                        "color": "#FFFFFF",
+                        "type":   "text",
+                        "text":   f"{emoji} 事件 #{event_id}",
+                        "color":  "#FFFFFF",
                         "weight": "bold",
-                        "size": "lg",
+                        "size":   "lg",
                     },
                     {
-                        "type": "text",
-                        "text": f"📍 {store}  👤 {user}",
-                        "color": "#FFFFFFCC",
-                        "size": "xs",
+                        "type":   "text",
+                        "text":   f"📍 {store}  👤 {user}",
+                        "color":  "#FFFFFFCC",
+                        "size":   "xs",
                         "margin": "xs",
                     },
                 ],
             },
             "body": {
-                "type": "box",
-                "layout": "vertical",
+                "type":       "box",
+                "layout":     "vertical",
                 "paddingAll": "16px",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": content,
-                        "wrap": True,
-                        "size": "md",
-                        "color": "#333333",
-                    },
-                    {"type": "separator", "margin": "md"},
-                    {
-                        "type": "text",
-                        "text": f"類別：{cat}",
-                        "size": "xs",
-                        "color": "#888888",
-                        "margin": "md",
-                    },
-                ],
+                "contents":   body_contents,
             },
             "footer": {
-                "type": "box",
-                "layout": "horizontal",
-                "spacing": "sm",
+                "type":       "box",
+                "layout":     "vertical",
+                "spacing":    "sm",
                 "paddingAll": "12px",
-                "contents": footer_contents,
+                "contents": [
+                    {
+                        "type":     "box",
+                        "layout":   "horizontal",
+                        "spacing":  "sm",
+                        "contents": row1,
+                    },
+                    {
+                        "type":     "box",
+                        "layout":   "horizontal",
+                        "spacing":  "sm",
+                        "contents": row2,
+                    },
+                ],
             },
         },
     }
 
     code, resp = _line_post(_LINE_PUSH_URL, {
-        "to": to,
+        "to":       to,
         "messages": [flex_msg],
     })
     if code != 200:
         logger.warning(f"push_event_flex failed: {resp}")
+    return code == 200
+
+
+def push_resolution_flex(to: str, event: dict, confirm_user: str = "",
+                         confirm_text: str = "") -> bool:
+    """
+    推播「建議結案」Flex 卡片給 Commander。
+    當現場回報「搞定」「修好了」等確認語意時觸發，Commander 確認後才正式結案。
+    按鈕：[✅ 確認結案] [👀 繼續觀察]
+    """
+    if not to:
+        return False
+    event_id = event.get("id", 0)
+    store    = event.get("store", "")
+    content  = event.get("content", "")[:60]
+    level    = event.get("level", "blue")
+
+    emoji_map = {"red": "🔴", "yellow": "🟡", "blue": "🔵"}
+    emoji     = emoji_map.get(level, "🔵")
+
+    body_text = confirm_text[:80] if confirm_text else "現場回報已處理完畢"
+    sub_text  = f"回報者：{confirm_user}" if confirm_user else ""
+
+    body_contents: list[dict] = [
+        {
+            "type":  "text",
+            "text":  f"原事件：{content}",
+            "wrap":  True,
+            "size":  "sm",
+            "color": "#555555",
+        },
+        {"type": "separator", "margin": "sm"},
+        {
+            "type":   "text",
+            "text":   f"📩 現場回覆：{body_text}",
+            "wrap":   True,
+            "size":   "md",
+            "color":  "#27AE60",
+            "margin": "sm",
+            "weight": "bold",
+        },
+    ]
+    if sub_text:
+        body_contents.append({
+            "type":   "text",
+            "text":   sub_text,
+            "size":   "xs",
+            "color":  "#AAAAAA",
+            "margin": "xs",
+        })
+
+    flex_msg = {
+        "type":    "flex",
+        "altText": f"💡 建議結案 #{event_id}｜{store}｜{body_text[:30]}",
+        "contents": {
+            "type": "bubble",
+            "size": "mega",
+            "header": {
+                "type":            "box",
+                "layout":          "vertical",
+                "backgroundColor": "#27AE60",
+                "paddingAll":      "14px",
+                "contents": [
+                    {
+                        "type":   "text",
+                        "text":   f"💡 建議結案",
+                        "color":  "#FFFFFF",
+                        "weight": "bold",
+                        "size":   "lg",
+                    },
+                    {
+                        "type":   "text",
+                        "text":   f"{emoji} 事件 #{event_id}  📍 {store}",
+                        "color":  "#FFFFFFCC",
+                        "size":   "xs",
+                        "margin": "xs",
+                    },
+                ],
+            },
+            "body": {
+                "type":       "box",
+                "layout":     "vertical",
+                "paddingAll": "16px",
+                "contents":   body_contents,
+            },
+            "footer": {
+                "type":       "box",
+                "layout":     "horizontal",
+                "spacing":    "sm",
+                "paddingAll": "12px",
+                "contents": [
+                    {
+                        "type": "button",
+                        "action": {
+                            "type":        "postback",
+                            "label":       "✅ 確認結案",
+                            "data":        f"close_confirm:{event_id}",
+                            "displayText": f"✅ 確認結案 #{event_id}",
+                        },
+                        "style": "primary",
+                        "color": "#27AE60",
+                        "flex":  1,
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type":        "postback",
+                            "label":       "👀 繼續觀察",
+                            "data":        f"keep_observe:{event_id}",
+                            "displayText": f"👀 繼續觀察 #{event_id}",
+                        },
+                        "style": "secondary",
+                        "flex":  1,
+                    },
+                ],
+            },
+        },
+    }
+
+    code, resp = _line_post(_LINE_PUSH_URL, {
+        "to":       to,
+        "messages": [flex_msg],
+    })
+    if code != 200:
+        logger.warning(f"push_resolution_flex failed: {resp}")
     return code == 200
 
 
