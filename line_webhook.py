@@ -47,6 +47,7 @@ from utils.line_utils import (
     get_group_store_map,
     send_reply,
     push_message,
+    get_user_display_name,
 )
 
 # ── 初始化 ────────────────────────────────────────────────────────
@@ -68,6 +69,34 @@ _REPLY_ON_EVENT = os.environ.get("LINE_REPLY_ON_EVENT", "false").lower() == "tru
 # 初始化資料庫（建表 + migration）
 edge_store.init_db()
 logger.info(f"Edge DB ready: {os.environ.get('EDGE_DB_PATH', '/tmp/edge_agent.db')}")
+
+# 名稱快取 TTL：同一 user_id 在 TTL 秒內不重複呼叫 LINE API
+_NAME_CACHE_TTL = 3600  # 1 小時
+_name_cache: dict[str, tuple[str, float]] = {}  # {user_id: (name, timestamp)}
+
+
+def _get_cached_display_name(user_id: str, group_id: str = "") -> str:
+    """
+    取得用戶顯示名稱，使用記憶體快取（TTL 1 小時）。
+    順序：記憶體快取 → LINE API → fallback Line_後6碼
+    """
+    import time
+    if not user_id:
+        return "Line用戶"
+    now = time.time()
+    cached = _name_cache.get(user_id)
+    if cached and now - cached[1] < _NAME_CACHE_TTL:
+        return cached[0]
+    # 呼叫 LINE API
+    try:
+        name = get_user_display_name(user_id, group_id)
+    except Exception:
+        name = ""
+    if not name:
+        name = f"Line_{user_id[-6:]}"
+    _name_cache[user_id] = (name, now)
+    logger.info(f"Display name resolved: {user_id[:8]}... → {name}")
+    return name
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -185,8 +214,8 @@ def _handle_event(event: dict) -> Optional[dict]:
     # ── 2. 解析門店 ──────────────────────────────────────────────
     store = _resolve_store(group_id, text)
 
-    # ── 3. 用戶別名（隱藏完整 ID）────────────────────────────────
-    user_alias = f"Line_{line_user_id[-6:]}" if line_user_id else "Line用戶"
+    # ── 3. 用戶顯示名稱（LINE 真實名稱 → 快取 → fallback ID 後綴）──
+    user_alias = _get_cached_display_name(line_user_id, group_id)
 
     # ── 4. 確認語意 → 自動結案 ───────────────────────────────────
     if edge_nlp.is_confirmation(text):

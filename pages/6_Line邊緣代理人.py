@@ -801,53 +801,68 @@ def generate_battle_report_filtered(evts: list[dict], filters: dict) -> str:
 # 渲染函數：對話氣泡
 # ================================================================
 def render_avatar_bubble(item: dict):
-    is_mon  = item["status"] in ["monitoring", "closed"]
-    bg_cls  = "bg-monitoring" if is_mon else f"bg-{item['level']}"
+    status     = item["status"]
+    is_mon     = status in ["monitoring", "closed"]
+    bg_cls     = "bg-monitoring" if is_mon else f"bg-{item['level']}"
 
     hours_passed = (datetime.now() - item["created_at"]).total_seconds() / 3600
-    if item["level"] == "red" and hours_passed > 4 and item["status"] == "pending":
+    if item["level"] == "red" and hours_passed > 4 and status == "pending":
         time_html = '<span class="time-warning">🚨 超過 4 小時未回報！</span>'
     else:
         time_html = f'<span class="time-normal">🕐 {item["created_at"].strftime("%H:%M")}</span>'
 
-    status_lbl = {"pending": "⏳ 待處理", "monitoring": "👀 觀察中", "closed": "✅ 已結案"}
-    avatar_ch  = item["store"][0] if item["store"] else "?"
-    cat_cn     = _CAT_CN.get(item.get("keyword_cat", ""), "")
-    cat_html   = f'<span class="cat-badge">{cat_cn}</span>' if cat_cn else ""
-    assigned   = f' | 負責：{item["assigned_to"]}' if item.get("assigned_to") else ""
-    user_name  = item.get("user") or item.get("user_alias", "")
+    # 已處理橫幅（monitoring / closed 顯示醒目標籤）
+    status_banner = ""
+    if status == "monitoring":
+        assigned_to = item.get("assigned_to", "")
+        status_banner = (
+            f'<div style="background:#E8F4FD;border-left:4px solid #3498DB;'
+            f'padding:4px 10px;border-radius:4px;font-size:12px;color:#2980B9;margin-bottom:6px;">'
+            f'👀 觀察中 · 已核准指派：{assigned_to}</div>'
+        )
+    elif status == "closed":
+        status_banner = (
+            f'<div style="background:#EAF7EE;border-left:4px solid #27AE60;'
+            f'padding:4px 10px;border-radius:4px;font-size:12px;color:#1E8449;margin-bottom:6px;">'
+            f'✅ 已結案</div>'
+        )
+
+    avatar_ch = item["store"][0] if item["store"] else "?"
+    cat_cn    = _CAT_CN.get(item.get("keyword_cat", ""), "")
+    cat_html  = f'<span class="cat-badge">{cat_cn}</span>' if cat_cn else ""
+    user_name = item.get("user") or item.get("user_alias", "")
 
     auto_closed_at = item.get("auto_closed_at")
     ai_close_html  = ""
-    if auto_closed_at and item["status"] == "closed":
+    if auto_closed_at and status == "closed":
         try:
             ac_time = datetime.fromisoformat(str(auto_closed_at)).strftime("%H:%M")
         except Exception:
             ac_time = "—"
         close_note = item.get("close_note", "AI 自動結案")
         ai_close_html = (
-            f'<div style="margin-top:6px;">'
-            f'<span class="ai-close-label">🤖 {close_note}於 {ac_time}</span>'
-            f'</div>'
+            f'<span style="font-size:11px;color:#7F8C8D;display:block;margin-top:4px;">'
+            f'🤖 {close_note}於 {ac_time}</span>'
         )
 
     st.markdown(f"""
 <div class="chat-bubble {bg_cls}">
     <div class="avatar">{avatar_ch}</div>
     <div style="flex:1;">
+        {status_banner}
         <div style="margin-bottom:6px;">
             <span class="store-tag">🏷️ {item['store']}</span>
             <span class="store-tag">👤 {user_name}</span>
             {cat_html}
         </div>
         <div style="font-size:14px;color:#333;margin-bottom:6px;line-height:1.5;">{item['content']}</div>
-        <div style="font-size:12px;color:#888;">{time_html} | {status_lbl[item['status']]}{assigned}</div>
+        <div style="font-size:12px;color:#888;">{time_html}</div>
         {ai_close_html}
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-    if item["status"] == "pending":
+    if status == "pending":
         if st.button("🎯 開啟決策沙盒", key=f"open_{item['id']}", use_container_width=True):
             show_decision_sandbox(item)
 
@@ -883,9 +898,10 @@ def show_decision_sandbox(item: dict):
         cnt    = rec_stats["cnt"] if rec_stats else "?"
         is_def = bool(rec_stats and rec_stats.get("is_default"))
         badge  = "⭐ 預設" if is_def else f"（歷史指派 {cnt} 次）"
+        # 用 p 取代 div，避免 Streamlit markdown 剝除外層 div 後留下孤立 </div>
         st.markdown(
-            f'<div class="rec-badge">💡 AI 推薦主管：<strong>{rec_mgr}</strong> '
-            f'<span style="opacity:0.7;font-size:0.78rem;">{badge} · 類別：{cat_cn or level}</span></div>',
+            f'<p class="rec-badge">💡 AI 推薦主管：<strong>{rec_mgr}</strong> '
+            f'<span style="opacity:0.7;font-size:0.78rem;">{badge} · 類別：{cat_cn or level}</span></p>',
             unsafe_allow_html=True
         )
 
@@ -907,11 +923,15 @@ def show_decision_sandbox(item: dict):
         key=f"draft_{item['id']}"
     )
 
-    group_id = item.get("group_id", "")
+    group_id   = item.get("group_id", "")
+    user_alias = item.get("user") or item.get("user_alias", "")
     if group_id and _HAS_LINE_UTILS:
         st.caption(f"📡 來源群組：`{group_id[:20]}...` — 核准後將自動推播回此群組")
+    elif not group_id and user_alias and not user_alias.startswith("模擬"):
+        # 有真實 LINE 用戶 ID 但無群組 → 私訊（非群組）
+        st.caption("📱 此為 LINE 私訊（非群組）— 核准後無法推播回群組，可手動轉發")
     elif not group_id:
-        st.caption("⚠️ 此事件無群組 ID（來自模擬器），核准後不會推播至 Line")
+        st.caption("⚠️ 此為模擬器事件，核准後不會推播至 Line")
 
     c1, c2 = st.columns(2)
     with c1:

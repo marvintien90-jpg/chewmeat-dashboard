@@ -20,9 +20,11 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
-_LINE_PUSH_URL  = "https://api.line.me/v2/bot/message/push"
-_LINE_INFO_URL  = "https://api.line.me/v2/bot/info"
+_LINE_REPLY_URL   = "https://api.line.me/v2/bot/message/reply"
+_LINE_PUSH_URL    = "https://api.line.me/v2/bot/message/push"
+_LINE_INFO_URL    = "https://api.line.me/v2/bot/info"
+_LINE_PROFILE_URL = "https://api.line.me/v2/bot/profile/{userId}"
+_LINE_GROUP_MEMBER_URL = "https://api.line.me/v2/bot/group/{groupId}/member/{userId}"
 
 
 # ── 金鑰讀取 ──────────────────────────────────────────────────────
@@ -164,6 +166,46 @@ def push_message(to: str, text: str) -> bool:
     if code != 200:
         logger.warning(f"push_message failed to={to[:8]}... status={code} resp={resp}")
     return code == 200
+
+
+def get_user_display_name(user_id: str, group_id: str = "") -> str:
+    """
+    呼叫 LINE API 取得用戶的真實顯示名稱（displayName）。
+    優先用群組成員 API（較精確），fallback 到個人 profile API。
+    失敗時回傳空字串（由呼叫端決定 fallback）。
+
+    Args:
+        user_id:  LINE userId（U 開頭）
+        group_id: 所在群組 ID（C 開頭，可空）
+    Returns:
+        displayName 字串，失敗回傳 ""
+    """
+    import requests
+    token = get_channel_access_token()
+    if not token or not user_id:
+        return ""
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 優先：群組成員 API
+    if group_id:
+        try:
+            url  = _LINE_GROUP_MEMBER_URL.format(groupId=group_id, userId=user_id)
+            resp = requests.get(url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                return resp.json().get("displayName", "")
+        except Exception:
+            pass
+
+    # Fallback：個人 profile API
+    try:
+        url  = _LINE_PROFILE_URL.format(userId=user_id)
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("displayName", "")
+    except Exception:
+        pass
+
+    return ""
 
 
 def push_battle_report(group_id: str, report_text: str) -> bool:
