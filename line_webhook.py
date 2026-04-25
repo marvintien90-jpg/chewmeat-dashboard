@@ -198,6 +198,44 @@ def _job_battle_report(push_hour: int):
         logger.error(f"[Scheduler] battle_report error: {e}", exc_info=True)
 
 
+def _job_hq_morning_report():
+    """每天 08:30：嗑肉數位總部早晨戰情簡報（完整版：事件＋門店＋專案）"""
+    try:
+        commander_id = _get_commander_id()
+        if not commander_id:
+            return
+        today     = datetime.now().strftime("%Y-%m-%d")
+        dedup_key = f"sched_hq_morning_{today}"
+        if edge_store.get_setting(dedup_key):
+            return
+        from utils.hq_report import build_morning_report
+        msg = build_morning_report()
+        push_message(commander_id, msg)
+        edge_store.set_setting(dedup_key, datetime.now().isoformat())
+        logger.info("[Scheduler] hq_morning_report sent")
+    except Exception as e:
+        logger.error(f"[Scheduler] hq_morning_report error: {e}", exc_info=True)
+
+
+def _job_hq_evening_report():
+    """每天 20:00：嗑肉數位總部晚間戰報（完整版：今日統計＋AI＋門店＋專案）"""
+    try:
+        commander_id = _get_commander_id()
+        if not commander_id:
+            return
+        today     = datetime.now().strftime("%Y-%m-%d")
+        dedup_key = f"sched_hq_evening_{today}"
+        if edge_store.get_setting(dedup_key):
+            return
+        from utils.hq_report import build_evening_report
+        msg = build_evening_report()
+        push_message(commander_id, msg)
+        edge_store.set_setting(dedup_key, datetime.now().isoformat())
+        logger.info("[Scheduler] hq_evening_report sent")
+    except Exception as e:
+        logger.error(f"[Scheduler] hq_evening_report error: {e}", exc_info=True)
+
+
 def _start_scheduler():
     """啟動 APScheduler（背景執行緒，隨 uvicorn process 存活）"""
     try:
@@ -217,21 +255,33 @@ def _start_scheduler():
             _job_monitoring_patrol, IntervalTrigger(hours=3), id="monitoring_patrol",
             next_run_time=datetime.now() + timedelta(minutes=10),
         )
-        # 每天 08:00 早安簡報
+        # 每天 08:00 輕量早安簡報（純 edge agent）
         sched.add_job(
             _job_morning_briefing, CronTrigger(hour=8, minute=0), id="morning_briefing",
         )
-        # 每天 17:00 / 19:00 戰報
+        # 每天 08:30 完整早晨戰情簡報（事件＋門店＋專案）
+        sched.add_job(
+            _job_hq_morning_report, CronTrigger(hour=8, minute=30), id="hq_morning",
+        )
+        # 每天 17:00 傍晚戰報
         sched.add_job(
             lambda: _job_battle_report(17), CronTrigger(hour=17, minute=0), id="battle_17",
         )
+        # 每天 19:00 晚間戰報（輕量）
         sched.add_job(
             lambda: _job_battle_report(19), CronTrigger(hour=19, minute=0), id="battle_19",
+        )
+        # 每天 20:00 完整晚間戰報（今日統計＋AI＋門店＋專案）
+        sched.add_job(
+            _job_hq_evening_report, CronTrigger(hour=20, minute=0), id="hq_evening",
         )
 
         sched.start()
         atexit.register(lambda: sched.shutdown(wait=False))
-        logger.info("[Scheduler] APScheduler started — 5 jobs active (overdue/monitoring patrol + morning/17h/19h reports)")
+        logger.info(
+            "[Scheduler] APScheduler started — 7 jobs active "
+            "(overdue/monitoring patrol + morning/17h/19h edge reports + 08:30/20:00 HQ reports)"
+        )
         return sched
     except ImportError:
         logger.warning("[Scheduler] apscheduler not installed — scheduled jobs disabled")
@@ -248,7 +298,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(
     title="嗑肉數位總部 · Line Webhook",
     description="Line Messaging API Webhook 接收器",
-    version="2.0.0",
+    version="2.1.0",
     lifespan=_lifespan,
 )
 
@@ -1032,11 +1082,13 @@ async def scheduler_status():
         # 透過 atexit registered 物件無法直接查詢，改透過 APScheduler internals
         # 用簡易方式：列出預定任務清單
         jobs_info = [
-            {"id": "overdue_patrol",   "desc": "🔴 紅色超時巡邏",   "interval": "每 1 小時"},
-            {"id": "monitoring_patrol","desc": "⏰ 監控追蹤",        "interval": "每 3 小時"},
-            {"id": "morning_briefing", "desc": "☀️ 早安簡報",        "interval": "每天 08:00"},
-            {"id": "battle_17",        "desc": "🌇 傍晚戰報",        "interval": "每天 17:00"},
-            {"id": "battle_19",        "desc": "🌙 晚間戰報",        "interval": "每天 19:00"},
+            {"id": "overdue_patrol",   "desc": "🔴 紅色超時巡邏",            "interval": "每 1 小時"},
+            {"id": "monitoring_patrol","desc": "⏰ 監控追蹤",                 "interval": "每 3 小時"},
+            {"id": "morning_briefing", "desc": "☀️ 早安簡報（Edge）",         "interval": "每天 08:00"},
+            {"id": "hq_morning",       "desc": "🌅 早晨戰情簡報（完整版）",   "interval": "每天 08:30"},
+            {"id": "battle_17",        "desc": "🌇 傍晚戰報",                 "interval": "每天 17:00"},
+            {"id": "battle_19",        "desc": "🌙 晚間戰報（Edge）",         "interval": "每天 19:00"},
+            {"id": "hq_evening",       "desc": "🌃 晚間戰報（完整版）",       "interval": "每天 20:00"},
         ]
         return {"scheduler": "running", "jobs": jobs_info, "timezone": "Asia/Taipei"}
     except Exception as e:
