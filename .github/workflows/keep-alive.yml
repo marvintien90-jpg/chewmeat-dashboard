@@ -1,0 +1,22 @@
+name: Keep-alive ping
+
+# 每 14 分鐘 ping Render 免費方案，防止服務進入休眠（15 分鐘無流量即休眠）
+on:
+  schedule:
+    - cron: "*/14 * * * *"
+  workflow_dispatch: # 允許手動觸發
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
+            https://kerou-line-webhook.onrender.com/health)
+          echo "HTTP status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "⚠️ Health check returned $STATUS (service may be cold-starting)"
+          else
+            echo "✅ Service is alive"
+          fi
