@@ -235,7 +235,21 @@ def run_health_check_job():
 
     return results
 
+def _ensure_it_table() -> None:
+    try:
+        from utils import edge_store
+        with edge_store._conn() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS it_health_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                check_time TEXT NOT NULL, service TEXT NOT NULL,
+                status TEXT NOT NULL, latency_ms INTEGER DEFAULT 0,
+                detail TEXT DEFAULT '', auto_repaired INTEGER DEFAULT 0
+            )""")
+    except Exception:
+        pass
+
 def get_recent_log(limit: int = 100) -> list[dict]:
+    _ensure_it_table()
     try:
         from utils import edge_store
         with edge_store._conn() as db:

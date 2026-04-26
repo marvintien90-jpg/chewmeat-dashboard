@@ -8,6 +8,59 @@ from utils import edge_store
 logger = logging.getLogger("kerou.auth_manager")
 
 ROLES = {"admin": "系統管理員", "manager": "部門主管", "staff": "一般員工"}
+
+
+def _ensure_tables() -> None:
+    """模組載入時確保 accounts / login_history 資料表存在（個別 execute，不依賴 executescript）"""
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS accounts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT    UNIQUE NOT NULL,
+            password_hash TEXT    NOT NULL,
+            display_name  TEXT    NOT NULL DEFAULT '',
+            role          TEXT    NOT NULL DEFAULT 'staff',
+            dept          TEXT    DEFAULT '',
+            allowed_pages TEXT    DEFAULT '[]',
+            status        TEXT    NOT NULL DEFAULT 'active',
+            created_at    TEXT    NOT NULL,
+            updated_at    TEXT    NOT NULL,
+            disabled_at   TEXT,
+            disabled_by   TEXT,
+            last_login    TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS login_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            username    TEXT    NOT NULL,
+            success     INTEGER NOT NULL DEFAULT 1,
+            ip_address  TEXT    DEFAULT '',
+            login_at    TEXT    NOT NULL,
+            fail_reason TEXT    DEFAULT ''
+        )""",
+    ]
+    try:
+        with edge_store._conn() as db:
+            for s in stmts:
+                db.execute(s)
+        # 確保至少有一個 admin 帳號
+        with edge_store._conn() as db:
+            cnt = db.execute("SELECT COUNT(*) FROM accounts WHERE role='admin'").fetchone()[0]
+            if cnt == 0:
+                now = datetime.now().isoformat()
+                ph  = hashlib.sha256(b"admin888").hexdigest()
+                pages = json.dumps(["數據戰情中心","專案追蹤師","決策AI偵察","品牌數位資產",
+                                    "系統設定","Line邊緣代理人","帳號管理","IT維護人員"],
+                                   ensure_ascii=False)
+                db.execute(
+                    "INSERT OR IGNORE INTO accounts "
+                    "(username,password_hash,display_name,role,dept,allowed_pages,status,created_at,updated_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    ("admin", ph, "系統管理員", "admin", "", pages, "active", now, now)
+                )
+    except Exception as e:
+        logger.warning(f"[auth_manager] _ensure_tables 失敗（稍後重試）: {e}")
+
+
+_ensure_tables()
 ALL_PAGES = ["數據戰情中心","專案追蹤師","決策AI偵察","品牌數位資產",
              "系統設定","Line邊緣代理人","帳號管理","IT維護人員"]
 ROLE_DEFAULT_PAGES = {
