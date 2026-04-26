@@ -19,7 +19,8 @@ _DEFAULT_ACCESS = {
     ACCESS_KEY: {
         "role": "admin",
         "display_name": "總指揮",
-        "allowed_pages": ["數據戰情中心", "專案追蹤師", "決策AI偵察", "品牌數位資產", "Line智能邊緣代理人", "系統設定"],
+        "allowed_pages": ["數據戰情中心", "專案追蹤師", "決策AI偵察", "品牌數位資產",
+                          "Line智能邊緣代理人", "系統設定", "帳號管理", "IT維護人員"],
     }
 }
 
@@ -222,7 +223,7 @@ def show_login():
                     allowed = set(user_cfg.get("allowed_pages", []))
                     role = user_cfg.get("role", "viewer")
                     if role == "admin":
-                        allowed.add("系統設定")
+                        allowed.update(["系統設定", "帳號管理", "IT維護人員"])
                     st.session_state["authenticated"]  = True
                     st.session_state["is_admin"]       = (role == "admin")
                     st.session_state["user_display_name"] = user_cfg.get("display_name", "使用者")
