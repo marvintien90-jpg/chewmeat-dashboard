@@ -28,8 +28,23 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── 功能列 ────────────────────────────────────────────────────────
-accounts = auth_manager.list_accounts()
+# ── 診斷 & 功能列 ─────────────────────────────────────────────────
+import os as _os
+_db_path = _os.environ.get("EDGE_DB_PATH", "/tmp/edge_agent.db")
+st.caption(f"🔍 DB路徑：`{_db_path}` | DB存在：`{_os.path.exists(_db_path)}`")
+
+try:
+    accounts = auth_manager.list_accounts()
+except Exception as _e:
+    st.error(f"❌ 資料庫錯誤：`{type(_e).__name__}: {_e}`")
+    st.info("嘗試重新建立資料表…")
+    try:
+        edge_store.init_db()
+        accounts = auth_manager.list_accounts()
+        st.success("✅ 已自動修復")
+    except Exception as _e2:
+        st.error(f"修復失敗：{_e2}")
+        st.stop()
 active_cnt   = sum(1 for a in accounts if a["status"] == "active")
 disabled_cnt = sum(1 for a in accounts if a["status"] == "disabled")
 history      = auth_manager.get_login_history(limit=100)
