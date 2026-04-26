@@ -17,6 +17,7 @@ from utils.ui_helpers import inject_global_css
 inject_global_css()
 
 from utils import health_monitor, edge_store
+edge_store.init_db()  # 確保 it_health_log 資料表存在
 
 # ── 跑馬燈 ───────────────────────────────────────────────────────
 try:

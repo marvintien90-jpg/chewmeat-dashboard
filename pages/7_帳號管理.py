@@ -9,6 +9,7 @@ if st.session_state.get("user_role") != "admin":
     st.error("此頁面僅限系統管理員存取"); st.stop()
 
 from utils import auth_manager, edge_store
+edge_store.init_db()  # 確保 accounts / login_history / it_health_log 資料表存在
 
 st.set_page_config(page_title="帳號管理", page_icon="🔐", layout="wide")
 
