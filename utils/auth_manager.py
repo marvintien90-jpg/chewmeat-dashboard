@@ -48,7 +48,7 @@ def _ensure_tables() -> None:
                 now = datetime.now().isoformat()
                 ph  = hashlib.sha256(b"admin888").hexdigest()
                 pages = json.dumps(["數據戰情中心","專案追蹤師","決策AI偵察","品牌數位資產",
-                                    "系統設定","Line邊緣代理人","帳號管理","IT維護人員"],
+                                    "系統設定","Line智能邊緣代理人","帳號管理","IT維護人員"],
                                    ensure_ascii=False)
                 db.execute(
                     "INSERT OR IGNORE INTO accounts "
@@ -62,7 +62,7 @@ def _ensure_tables() -> None:
 
 _ensure_tables()
 ALL_PAGES = ["數據戰情中心","專案追蹤師","決策AI偵察","品牌數位資產",
-             "系統設定","Line邊緣代理人","帳號管理","IT維護人員"]
+             "系統設定","Line智能邊緣代理人","帳號管理","IT維護人員"]
 ROLE_DEFAULT_PAGES = {
     "admin":   ALL_PAGES,
     "manager": ["數據戰情中心","專案追蹤師","決策AI偵察","品牌數位資產"],

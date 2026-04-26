@@ -157,7 +157,7 @@ def _ensure_default_admin() -> None:
             now = datetime.now().isoformat()
             ph  = hashlib.sha256(b"admin888").hexdigest()
             all_pages = _json.dumps(["數據戰情中心","專案追蹤師","決策AI偵察","品牌數位資產",
-                                     "系統設定","Line邊緣代理人","帳號管理","IT維護人員"], ensure_ascii=False)
+                                     "系統設定","Line智能邊緣代理人","帳號管理","IT維護人員"], ensure_ascii=False)
             try:
                 db.execute(
                     "INSERT OR IGNORE INTO accounts (username,password_hash,display_name,role,dept,allowed_pages,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",

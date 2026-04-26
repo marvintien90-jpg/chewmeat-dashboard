@@ -223,7 +223,8 @@ def show_login():
                     allowed = set(user_cfg.get("allowed_pages", []))
                     role = user_cfg.get("role", "viewer")
                     if role == "admin":
-                        allowed.update(["系統設定", "帳號管理", "IT維護人員"])
+                        allowed.update(["系統設定", "帳號管理", "IT維護人員",
+                                        "Line智能邊緣代理人"])
                     st.session_state["authenticated"]  = True
                     st.session_state["is_admin"]       = (role == "admin")
                     st.session_state["user_display_name"] = user_cfg.get("display_name", "使用者")
