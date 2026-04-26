@@ -236,6 +236,15 @@ def _job_hq_evening_report():
         logger.error(f"[Scheduler] hq_evening_report error: {e}", exc_info=True)
 
 
+def _job_it_health_check():
+    """每 1 小時：IT 全服務健康檢查 + 自動修復 + LINE 狀態推播"""
+    try:
+        from utils.health_monitor import run_health_check_job
+        run_health_check_job()
+    except Exception as e:
+        logger.error(f"[Scheduler] it_health_check error: {e}", exc_info=True)
+
+
 def _start_scheduler():
     """啟動 APScheduler（背景執行緒，隨 uvicorn process 存活）"""
     try:
@@ -275,12 +284,17 @@ def _start_scheduler():
         sched.add_job(
             _job_hq_evening_report, CronTrigger(hour=20, minute=0), id="hq_evening",
         )
+        # 每 1 小時：IT 全服務健康檢查 + 自動修復 + LINE 推播（首次延遲 3 分鐘）
+        sched.add_job(
+            _job_it_health_check, IntervalTrigger(hours=1), id="it_health_check",
+            next_run_time=datetime.now() + timedelta(minutes=3),
+        )
 
         sched.start()
         atexit.register(lambda: sched.shutdown(wait=False))
         logger.info(
-            "[Scheduler] APScheduler started — 7 jobs active "
-            "(overdue/monitoring patrol + morning/17h/19h edge reports + 08:30/20:00 HQ reports)"
+            "[Scheduler] APScheduler started — 8 jobs active "
+            "(overdue/monitoring/it_health patrol + morning/17h/19h edge reports + 08:30/20:00 HQ reports)"
         )
         return sched
     except ImportError:

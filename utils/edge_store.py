@@ -106,9 +106,65 @@ def init_db() -> None:
             value      TEXT    NOT NULL,
             updated_at TEXT    NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS accounts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT    UNIQUE NOT NULL,
+            password_hash TEXT    NOT NULL,
+            display_name  TEXT    NOT NULL DEFAULT '',
+            role          TEXT    NOT NULL DEFAULT 'staff',
+            dept          TEXT    DEFAULT '',
+            allowed_pages TEXT    DEFAULT '[]',
+            status        TEXT    NOT NULL DEFAULT 'active',
+            created_at    TEXT    NOT NULL,
+            updated_at    TEXT    NOT NULL,
+            disabled_at   TEXT,
+            disabled_by   TEXT,
+            last_login    TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS login_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            username    TEXT    NOT NULL,
+            success     INTEGER NOT NULL DEFAULT 1,
+            ip_address  TEXT    DEFAULT '',
+            login_at    TEXT    NOT NULL,
+            fail_reason TEXT    DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS it_health_log (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            check_time    TEXT    NOT NULL,
+            service       TEXT    NOT NULL,
+            status        TEXT    NOT NULL,
+            latency_ms    INTEGER DEFAULT 0,
+            detail        TEXT    DEFAULT '',
+            auto_repaired INTEGER DEFAULT 0
+        );
         """)
     # v3/v4 欄位 Migration（idempotent）
     _migrate_v3()
+    # 確保系統初始 admin 帳號存在
+    _ensure_default_admin()
+
+
+def _ensure_default_admin() -> None:
+    """確保至少有一個 admin 帳號（首次啟動自動建立）"""
+    import hashlib, json as _json
+    with _conn() as db:
+        count = db.execute("SELECT COUNT(*) FROM accounts WHERE role='admin' AND status='active'").fetchone()[0]
+        if count == 0:
+            now = datetime.now().isoformat()
+            ph  = hashlib.sha256(b"admin888").hexdigest()
+            all_pages = _json.dumps(["數據戰情中心","專案追蹤師","決策AI偵察","品牌數位資產",
+                                     "系統設定","Line邊緣代理人","帳號管理","IT維護人員"], ensure_ascii=False)
+            try:
+                db.execute(
+                    "INSERT OR IGNORE INTO accounts (username,password_hash,display_name,role,dept,allowed_pages,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    ("admin", ph, "系統管理員", "admin", "", all_pages, "active", now, now)
+                )
+            except Exception:
+                pass
 
 
 def _migrate_v3() -> None:

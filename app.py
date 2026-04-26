@@ -53,6 +53,8 @@ DISPLAY_NAMES: dict[str, str] = {
     "品牌數位資產":     "[品牌] 數位資產管理",
     "Line智能邊緣代理人": "[指揮] Line 邊緣代理人",
     "系統設定":         "[管理] 系統設定",
+    "帳號管理":         "[管理] 帳號資安管理",
+    "IT維護人員":       "[維運] IT 自動維護",
 }
 REVERSE_NAMES: dict[str, str] = {v: k for k, v in DISPLAY_NAMES.items()}
 
@@ -190,25 +192,49 @@ def show_login():
         )
         if st.button("進入總部", type="primary", use_container_width=True):
             if key_input:
-                access_db = _load_access_control()
-                if key_input in access_db:
-                    user_cfg = access_db[key_input]
-                    st.session_state["authenticated"] = True
-                    st.session_state["is_admin"] = (user_cfg.get("role") == "admin")
-                    st.session_state["user_display_name"] = user_cfg.get("display_name", "使用者")
+                # ── 新版：嘗試 auth_manager 多帳號登入（帳號名稱 + 密碼）────────
+                user_cfg = None
+                try:
+                    from utils import edge_store as _es
+                    _es.init_db()
+                    from utils.auth_manager import authenticate as _auth
+                    user_row = _auth(key_input.split(":")[0] if ":" in key_input else "admin",
+                                     key_input.split(":",1)[1] if ":" in key_input else key_input)
+                    if user_row:
+                        import json as _json
+                        pages = _json.loads(user_row.get("allowed_pages","[]") or "[]")
+                        user_cfg = {
+                            "role": user_row["role"],
+                            "display_name": user_row.get("display_name","使用者"),
+                            "allowed_pages": pages,
+                            "username": user_row["username"],
+                        }
+                except Exception:
+                    pass
+                # ── 舊版 fallback：access_control.json 或 st.secrets ──────────
+                if user_cfg is None:
+                    access_db = _load_access_control()
+                    if key_input in access_db:
+                        user_cfg = access_db[key_input]
+                        user_cfg.setdefault("username", "admin")
+
+                if user_cfg:
                     allowed = set(user_cfg.get("allowed_pages", []))
-                    st.session_state["enabled_pages"] = allowed
-                    if user_cfg.get("role") == "admin":
+                    role = user_cfg.get("role", "viewer")
+                    if role == "admin":
                         allowed.add("系統設定")
-                        st.session_state["enabled_pages"] = allowed
-                    st.session_state["user_role"] = user_cfg.get("role", "viewer")
-                    # 直接賦值 multiselect widget state，強制覆蓋 browser 端快取
+                    st.session_state["authenticated"]  = True
+                    st.session_state["is_admin"]       = (role == "admin")
+                    st.session_state["user_display_name"] = user_cfg.get("display_name", "使用者")
+                    st.session_state["user_role"]      = role
+                    st.session_state["username"]       = user_cfg.get("username", "admin")
+                    st.session_state["enabled_pages"]  = allowed
                     st.session_state["sidebar_pages_multiselect"] = [
                         DISPLAY_NAMES[p] for p in allowed if p in DISPLAY_NAMES
                     ]
                     st.rerun()
                 else:
-                    st.error("❌ 密鑰錯誤，請重新輸入")
+                    st.error("❌ 帳號或密碼錯誤，請重新輸入")
         st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -222,6 +248,8 @@ ALL_PAGES = {
     "品牌數位資產":     ("pages/4_品牌數位資產.py",   "sparkles",       "活動成效追蹤・ROI 分析<br>社群觸及・營收增長對照"),
     "Line智能邊緣代理人": ("pages/6_Line邊緣代理人.py", "bell",          "Line群組掃描・三色分級預警<br>分身決策沙盒・全景戰報推播"),
     "系統設定":         ("pages/5_系統設定.py",       "cog",            "部門 Sheet 連線・密碼管理<br>系統參數設定"),
+    "帳號管理":         ("pages/7_帳號管理.py",       "shield-check",   "帳號生命週期・角色權限管理<br>登入記錄・資安維護"),
+    "IT維護人員":       ("pages/8_IT維護人員.py",     "server",         "全服務健康監控・自動修復<br>資安偵測・每小時 LINE 推播"),
 }
 
 CARD_CLASSES = {
@@ -231,6 +259,8 @@ CARD_CLASSES = {
     "品牌數位資產":     "module-card-mkt",
     "Line智能邊緣代理人": "module-card-ops",
     "系統設定":         "module-card-admin",
+    "帳號管理":         "module-card-admin",
+    "IT維護人員":       "module-card-ops",
 }
 
 
@@ -370,8 +400,8 @@ def show_portal():
     cols = st.columns(2, gap="large")
     page_items = list(ALL_PAGES.items())
     for i, (page_name, (path, icon, desc)) in enumerate(page_items):
-        # Skip system settings for non-admin
-        if page_name == "系統設定" and not st.session_state.get("is_admin", False):
+        # Skip admin-only pages for non-admin
+        if page_name in ("系統設定","帳號管理","IT維護人員") and not st.session_state.get("is_admin", False):
             continue
         col = cols[i % 2]
         extra_class = CARD_CLASSES.get(page_name, "")
