@@ -7,11 +7,23 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger("kerou.health_monitor")
 TZ = ZoneInfo("Asia/Taipei")
 
-RENDER_API_KEY    = os.environ.get("RENDER_API_KEY", "")
-RENDER_SVC_ID     = os.environ.get("RENDER_SERVICE_ID", "srv-d7m2qre7r5hc73fvaetg")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-LINE_TOKEN        = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
-LINE_COMMANDER    = os.environ.get("LINE_COMMANDER_USER_ID", "")
+def _get_secret(key: str, default: str = "") -> str:
+    """從 os.environ 或 st.secrets 讀取金鑰（Streamlit Cloud 用 st.secrets）"""
+    val = os.environ.get(key, "")
+    if val:
+        return val
+    try:
+        import streamlit as st
+        val = st.secrets.get(key, "") or ""
+    except Exception:
+        pass
+    return val or default
+
+RENDER_API_KEY    = lambda: _get_secret("RENDER_API_KEY")
+RENDER_SVC_ID     = lambda: _get_secret("RENDER_SERVICE_ID", "srv-d7m2qre7r5hc73fvaetg")
+ANTHROPIC_API_KEY = lambda: _get_secret("ANTHROPIC_API_KEY")
+LINE_TOKEN        = lambda: _get_secret("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_COMMANDER    = lambda: _get_secret("LINE_COMMANDER_USER_ID")
 
 def _now(): return datetime.now(TZ)
 
@@ -28,12 +40,13 @@ def check_render_webhook() -> dict:
         return {"service":"Render Webhook","ok":False,"latency_ms":0,"detail":str(e)[:80]}
 
 def check_anthropic_api() -> dict:
-    if not ANTHROPIC_API_KEY:
+    key = ANTHROPIC_API_KEY()
+    if not key:
         return {"service":"Claude AI","ok":False,"latency_ms":0,"detail":"ANTHROPIC_API_KEY 未設定"}
     try:
         t = time.time()
         r = requests.get("https://api.anthropic.com/v1/models",
-                         headers={"x-api-key":ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01"},
+                         headers={"x-api-key":key,"anthropic-version":"2023-06-01"},
                          timeout=10)
         ms = int((time.time()-t)*1000)
         ok = r.status_code == 200
@@ -43,12 +56,13 @@ def check_anthropic_api() -> dict:
         return {"service":"Claude AI","ok":False,"latency_ms":0,"detail":str(e)[:80]}
 
 def check_line_api() -> dict:
-    if not LINE_TOKEN:
+    token = LINE_TOKEN()
+    if not token:
         return {"service":"LINE API","ok":False,"latency_ms":0,"detail":"LINE_CHANNEL_ACCESS_TOKEN 未設定"}
     try:
         t = time.time()
         r = requests.get("https://api.line.me/v2/bot/info",
-                         headers={"Authorization":f"Bearer {LINE_TOKEN}"}, timeout=10)
+                         headers={"Authorization":f"Bearer {token}"}, timeout=10)
         ms = int((time.time()-t)*1000)
         ok = r.status_code == 200
         detail = r.json().get("displayName","正常") if ok else f"HTTP {r.status_code}"
@@ -57,12 +71,17 @@ def check_line_api() -> dict:
         return {"service":"LINE API","ok":False,"latency_ms":0,"detail":str(e)[:80]}
 
 def check_google_sheets() -> dict:
+    gcp_json = _get_secret("GCP_SERVICE_ACCOUNT_JSON")
+    if not gcp_json:
+        return {"service":"Google Sheets","ok":False,"latency_ms":0,"detail":"GCP_SERVICE_ACCOUNT_JSON 未設定"}
     try:
+        import json as _json
         t = time.time()
-        from lib.config import get_service_account_info, DRIVE_SCOPES
         from google.oauth2.service_account import Credentials
         import gspread
-        creds = Credentials.from_service_account_info(get_service_account_info(), scopes=DRIVE_SCOPES)
+        DRIVE_SCOPES = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+        info = _json.loads(gcp_json)
+        creds = Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
         gspread.authorize(creds)
         ms = int((time.time()-t)*1000)
         return {"service":"Google Sheets","ok":True,"latency_ms":ms,"detail":"授權正常"}
@@ -114,11 +133,13 @@ def auto_repair(failed: list[dict]) -> list[str]:
     for r in failed:
         svc = r["service"]
         if "Render Webhook" in svc:
-            if RENDER_API_KEY:
+            api_key = RENDER_API_KEY()
+            svc_id  = RENDER_SVC_ID()
+            if api_key:
                 try:
                     resp = requests.post(
-                        f"https://api.render.com/v1/services/{RENDER_SVC_ID}/deploys",
-                        headers={"Authorization":f"Bearer {RENDER_API_KEY}","Content-Type":"application/json"},
+                        f"https://api.render.com/v1/services/{svc_id}/deploys",
+                        headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
                         json={"clearCache":"do_not_clear"}, timeout=15
                     )
                     actions.append(f"✅ Render Webhook：已觸發重新部署 (HTTP {resp.status_code})")
@@ -139,13 +160,15 @@ def auto_repair(failed: list[dict]) -> list[str]:
 # ── LINE 推播 ─────────────────────────────────────────────────────
 
 def push_alert(message: str):
-    if not LINE_TOKEN or not LINE_COMMANDER:
+    token     = LINE_TOKEN()
+    commander = LINE_COMMANDER()
+    if not token or not commander:
         return
     try:
         requests.post(
             "https://api.line.me/v2/bot/message/push",
-            headers={"Authorization":f"Bearer {LINE_TOKEN}","Content-Type":"application/json"},
-            json={"to":LINE_COMMANDER,"messages":[{"type":"text","text":message}]},
+            headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"},
+            json={"to":commander,"messages":[{"type":"text","text":message}]},
             timeout=10
         )
     except Exception as e:
@@ -163,12 +186,12 @@ def check_security() -> list[dict]:
                             "detail":f"帳號 {f['username']} 1小時內登入失敗 {f['cnt']} 次"})
     except Exception:
         pass
-    # API key 暴露檢查（env var 是否齊全）
+    # API key 暴露檢查（env var 或 st.secrets 是否齊全）
     required_keys = ["ANTHROPIC_API_KEY","LINE_CHANNEL_SECRET","LINE_CHANNEL_ACCESS_TOKEN",
                      "GCP_SERVICE_ACCOUNT_JSON"]
     for k in required_keys:
-        if not os.environ.get(k, ""):
-            threats.append({"type":"missing_key","severity":"high","detail":f"{k} 環境變數缺失"})
+        if not _get_secret(k):
+            threats.append({"type":"missing_key","severity":"high","detail":f"{k} 金鑰缺失"})
     return threats
 
 # ── 排程主函式 ────────────────────────────────────────────────────
