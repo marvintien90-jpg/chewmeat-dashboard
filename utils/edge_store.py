@@ -587,8 +587,8 @@ def get_setting(key: str) -> Optional[str]:
     return row["value"] if row else None
 
 
-def set_setting(key: str, value: str) -> None:
-    """儲存系統設定值（UPSERT）"""
+def _set_setting_local(key: str, value: str) -> None:
+    """只寫入本地 SQLite（供 settings_store 還原時使用，避免循環呼叫）"""
     now = datetime.now().isoformat()
     with _conn() as db:
         db.execute(
@@ -598,6 +598,19 @@ def set_setting(key: str, value: str) -> None:
                DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
             (key, value, now)
         )
+
+
+def set_setting(key: str, value: str) -> None:
+    """儲存系統設定值（UPSERT）— 同步寫入 SQLite，背景備份到 GSheets"""
+    _set_setting_local(key, value)
+    try:
+        import threading
+        from utils import settings_store
+        threading.Thread(
+            target=settings_store.save, args=(key, value), daemon=True
+        ).start()
+    except Exception:
+        pass
 
 
 # ── 執行窗口列表 ──────────────────────────────────────────────────

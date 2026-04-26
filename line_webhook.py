@@ -291,6 +291,13 @@ def _start_scheduler():
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """FastAPI lifespan：啟動排程器，關閉時由 atexit 清理。"""
+    # 從 GSheets 還原使用者設定（解決 Render 重啟清空 /tmp/SQLite 問題）
+    try:
+        from utils.settings_store import restore_to_sqlite
+        restored = restore_to_sqlite()
+        logger.info(f"[startup] 設定還原完成：{restored} 筆 from GSheets")
+    except Exception as e:
+        logger.warning(f"[startup] 設定還原失敗（將使用預設值）: {e}")
     _start_scheduler()
     yield
 
