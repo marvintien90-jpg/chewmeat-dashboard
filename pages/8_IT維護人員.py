@@ -12,7 +12,7 @@ if not st.session_state.get("authenticated", False):
     st.page_link("app.py", label="← 返回數位總部大門")
     st.stop()
 
-from utils.icons import svg_icon
+from utils.icons import icon_svg
 from utils.ui_helpers import inject_global_css
 inject_global_css()
 
@@ -48,7 +48,7 @@ st.markdown(f"""
 # ── Header ───────────────────────────────────────────────────────
 st.markdown(f"""
 <div style="display:flex;align-items:center;gap:12px;padding:4px 0 12px">
-  {svg_icon("server",36,"#0ea5e9")}
+  {icon_svg("server",36,"#0ea5e9")}
   <div>
     <h2 style="margin:0;font-size:1.5rem;font-weight:700">24 小時 IT 維護人員</h2>
     <p style="margin:0;font-size:.85rem;color:#888">全服務健康監控・自動修復・資安偵測</p>

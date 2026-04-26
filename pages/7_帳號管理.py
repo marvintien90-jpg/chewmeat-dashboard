@@ -1,6 +1,6 @@
 """pages/7_帳號管理.py — 帳號資安管理系統"""
 import streamlit as st, json
-from utils.icons import svg_icon
+from utils.icons import icon_svg
 
 # ── 權限守門 ──────────────────────────────────────────────────────
 if not st.session_state.get("authenticated"):
@@ -19,7 +19,7 @@ STATUS_ICON = {"active":"✅ 生效中","disabled":"⛔ 已停用"}
 # ── Header ────────────────────────────────────────────────────────
 st.markdown(f"""
 <div style="display:flex;align-items:center;gap:12px;padding:12px 0 4px">
-  {svg_icon("shield-check",32,"#6366f1")}
+  {icon_svg("shield-check",32,"#6366f1")}
   <div>
     <h2 style="margin:0;font-size:1.5rem;font-weight:700">帳號資安管理</h2>
     <p style="margin:0;font-size:.85rem;color:#888">帳號生命週期・登入記錄・權限控管</p>
