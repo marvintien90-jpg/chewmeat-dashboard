@@ -19,13 +19,36 @@ _lock = threading.Lock()
 
 # ── GSheets 連線 ──────────────────────────────────────────────────
 
+def _get_gcp_json() -> dict:
+    """從 os.environ 或 st.secrets 讀取 GCP_SERVICE_ACCOUNT_JSON，回傳 dict"""
+    import json as _json, os as _os
+    # 1. os.environ（Render 端）
+    raw = _os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
+    if raw:
+        return _json.loads(raw)
+    # 2. st.secrets（Streamlit Cloud 端）
+    try:
+        import streamlit as st
+        raw = st.secrets.get("GCP_SERVICE_ACCOUNT_JSON", "") or ""
+        if raw:
+            return _json.loads(raw)
+        # 也支援 [gcp_service_account] 巢狀格式
+        nested = st.secrets.get("gcp_service_account", {})
+        if nested:
+            return dict(nested)
+    except Exception:
+        pass
+    raise RuntimeError("找不到 GCP_SERVICE_ACCOUNT_JSON")
+
+
 def _get_client():
     try:
-        from lib.config import get_service_account_info, DRIVE_SCOPES
         from google.oauth2.service_account import Credentials
         import gspread
-        info  = get_service_account_info()
-        creds = Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
+        SCOPES = ["https://spreadsheets.google.com/feeds",
+                  "https://www.googleapis.com/auth/drive"]
+        info  = _get_gcp_json()
+        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
         return gspread.authorize(creds)
     except Exception as e:
         logger.warning(f"[settings_store] GCP 連線失敗: {e}")
