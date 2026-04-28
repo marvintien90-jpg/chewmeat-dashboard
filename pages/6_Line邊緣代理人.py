@@ -239,21 +239,19 @@ for _k in _LINE_CFG_KEYS:
             if _v:
                 os.environ[_k] = _v
 
-# ── Claude AI API Key 注入（優先順序：st.secrets → SQLite → os.environ 維持原值）──
-if not os.environ.get("ANTHROPIC_API_KEY"):
-    # 1. Streamlit Cloud Secrets（永久儲存，優先）
-    _secrets_key = ""
+# ── Claude AI API Key 注入（優先順序：SQLite → st.secrets → os.environ 維持原值）──
+# SQLite 優先：允許使用者透過 UI 儲存最新金鑰並覆蓋可能過期的 st.secrets 設定
+_sqlite_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
+if _sqlite_key:
+    os.environ["ANTHROPIC_API_KEY"] = _sqlite_key  # 使用者手動儲存的金鑰，最高優先
+elif not os.environ.get("ANTHROPIC_API_KEY"):
+    # SQLite 無金鑰時，fallback 到 st.secrets（Streamlit Cloud 部署設定）
     try:
         _secrets_key = (st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip()
     except Exception:
-        pass
+        _secrets_key = ""
     if _secrets_key:
         os.environ["ANTHROPIC_API_KEY"] = _secrets_key
-    else:
-        # 2. SQLite（本機 / 同一 session 內有效）
-        _sqlite_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
-        if _sqlite_key:
-            os.environ["ANTHROPIC_API_KEY"] = _sqlite_key
 
 # ================================================================
 # CSS
@@ -601,16 +599,15 @@ def generate_ai_strategic_summary(events: list[dict]) -> str:
     overdue = edge_store.get_overdue_red_events(hours=4)
     repeats = edge_store.get_repeat_repairs_24h()
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    # 優先順序：SQLite（使用者手動儲存）> os.environ > st.secrets
+    api_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
-        # fallback 1: st.secrets（Streamlit Cloud 永久設定）
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
         try:
             api_key = (st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip()
         except Exception:
             pass
-    if not api_key:
-        # fallback 2: SQLite（本 session 設定）
-        api_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
     if api_key:
         os.environ["ANTHROPIC_API_KEY"] = api_key  # 確保後續流程一致
 
@@ -1696,7 +1693,7 @@ def render_view_settings():
     with tab_ai:
         st.markdown("#### 🤖 Claude AI 設定")
 
-        # ── 偵測當前 Key 來源 ──────────────────────────────────────
+        # ── 偵測當前 Key 來源（新優先順序：SQLite > os.environ > st.secrets）──
         _env_key     = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         _sqlite_key  = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
         _secrets_key = ""
@@ -1705,20 +1702,21 @@ def render_view_settings():
         except Exception:
             pass
 
-        # 決定顯示哪個來源
-        if _secrets_key:
-            _masked = _secrets_key[:8] + "..." + _secrets_key[-4:] if len(_secrets_key) > 12 else "（已設定）"
-            st.success(f"🟢 **Streamlit Cloud Secrets** 已設定 API Key：`{_masked}`")
-            st.caption("此為最高優先來源，App 重啟後仍有效。")
-        elif _sqlite_key:
+        # 決定顯示哪個來源（同注入邏輯一致）
+        if _sqlite_key:
             _masked = _sqlite_key[:8] + "..." + _sqlite_key[-4:] if len(_sqlite_key) > 12 else "（已設定）"
-            st.warning(
-                f"🟡 **SQLite（暫存）** 已設定 API Key：`{_masked}`\n\n"
-                "⚠️ 此儲存方式在 **Streamlit Cloud 重啟後會清空**。"
-                "請將 Key 設定到 Streamlit Cloud Secrets 以確保永久生效（見下方說明）。"
+            st.success(
+                f"🟢 **SQLite + GSheets 備份** 已設定 API Key：`{_masked}`\n\n"
+                "✅ 此金鑰已備份至 Google Sheets，重啟後自動還原，為最高優先來源。"
             )
         elif _env_key:
             st.info("🔵 API Key 已在環境變數中（本 session 有效）")
+        elif _secrets_key:
+            _masked = _secrets_key[:8] + "..." + _secrets_key[-4:] if len(_secrets_key) > 12 else "（已設定）"
+            st.warning(
+                f"🟡 **Streamlit Cloud Secrets** 已設定 API Key：`{_masked}`\n\n"
+                "⚠️ 若此金鑰已過期，請在下方輸入最新金鑰並儲存（可覆蓋 Secrets 的舊金鑰）。"
+            )
         else:
             st.error("⚪ 尚未設定任何 API Key")
 
@@ -1726,6 +1724,7 @@ def render_view_settings():
 
         # ── 儲存表單 ──────────────────────────────────────────────
         st.markdown("**📝 輸入並儲存 API Key**")
+        st.caption("儲存後備份至 Google Sheets，系統重啟後自動還原。")
         with st.form("ai_api_form"):
             cfg_anthropic = st.text_input(
                 "Anthropic API Key",
@@ -1733,20 +1732,15 @@ def render_view_settings():
                 type="password",
                 placeholder="sk-ant-api03-xxxxxxxx（留空則不更新）",
             )
-            ai_save_btn = st.form_submit_button("💾 儲存到 SQLite（本 session）", type="primary", use_container_width=True)
+            ai_save_btn = st.form_submit_button("💾 儲存（SQLite + GSheets 備份）", type="primary", use_container_width=True)
 
         if ai_save_btn:
             _new_key = cfg_anthropic.strip()
             if _new_key:
-                edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", _new_key)
+                edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", _new_key)  # SQLite + GSheets 備份
                 os.environ["ANTHROPIC_API_KEY"] = _new_key
                 st.session_state.pop("edge_ai_last_error", None)
-                st.success("✅ API Key 已儲存至 SQLite 並注入本 session 環境")
-                st.info(
-                    "💡 **要讓 Key 在 Streamlit Cloud 重啟後仍有效**，"
-                    "請到 Streamlit Cloud dashboard → 你的 App → Settings → Secrets，"
-                    "新增一行：\n\n`ANTHROPIC_API_KEY = \"你的key\"`"
-                )
+                st.success("✅ API Key 已儲存至 SQLite，並已排程備份到 Google Sheets（重啟後自動還原）")
                 st.rerun()
             else:
                 st.warning("⚠️ 未輸入任何值，原設定不變")
@@ -1756,15 +1750,15 @@ def render_view_settings():
         # ── 測試連線 ──────────────────────────────────────────────
         st.markdown("**🔌 測試 Claude AI 連線**")
         if st.button("🤖 立即測試", use_container_width=False, key="test_ai_btn", type="primary"):
-            # 按優先順序取得 key
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+            # 優先順序：SQLite（使用者手動儲存）> os.environ > st.secrets
+            api_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
+            if not api_key:
+                api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
             if not api_key:
                 try:
                     api_key = (st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip()
                 except Exception:
                     pass
-            if not api_key:
-                api_key = (edge_store.get_setting("app_cfg_ANTHROPIC_API_KEY") or "").strip()
             if not api_key:
                 st.warning("⚠️ 請先設定 Anthropic API Key（見上方說明）")
             else:
@@ -1799,26 +1793,28 @@ def render_view_settings():
         # ── Streamlit Cloud Secrets 設定說明 ───────────────────────
         with st.expander("📖 如何永久儲存 API Key（Streamlit Cloud）", expanded=not bool(_secrets_key)):
             st.markdown("""
-**步驟：**
+**最簡單方式（推薦）：直接在上方表單輸入 API Key 並儲存**
+
+系統會自動備份到 Google Sheets，重啟後自動還原，無需設定 Streamlit Cloud Secrets。
+
+---
+**進階方式（Streamlit Cloud Secrets）：**
 1. 前往 [Streamlit Cloud](https://share.streamlit.io/) → 找到你的 App
-2. 點擊右上角 **⋮** → **Settings**
-3. 選擇 **Secrets** 頁籤
-4. 在文字框中加入：
+2. 點擊右上角 **⋮** → **Settings** → **Secrets**
+3. 加入：
 ```toml
 ANTHROPIC_API_KEY = "sk-ant-api03-你的完整金鑰"
 ```
-5. 點擊 **Save** → App 會自動重啟並套用
-
-✅ 設定後每次重啟都會自動載入，不需要再手動輸入。
+4. 點擊 **Save** — 注意：若上方表單已有儲存值，SQLite 金鑰會優先使用。
 """)
 
         # ── 清除按鈕 ──────────────────────────────────────────────
         if _sqlite_key:
-            if st.button("🗑️ 清除 SQLite 中的 API Key", key="clear_ai_key_btn", type="secondary"):
-                edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", "")
+            if st.button("🗑️ 清除已儲存的 API Key", key="clear_ai_key_btn", type="secondary"):
+                edge_store.set_setting("app_cfg_ANTHROPIC_API_KEY", "")  # 清空 SQLite + GSheets 備份
                 os.environ.pop("ANTHROPIC_API_KEY", None)
                 st.session_state.pop("edge_ai_last_error", None)
-                st.toast("✅ SQLite 中的 API Key 已清除")
+                st.toast("✅ API Key 已清除（SQLite + GSheets 備份）")
                 st.rerun()
 
     # ──────────────────────────────────────────────────────────────

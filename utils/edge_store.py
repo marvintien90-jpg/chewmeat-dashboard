@@ -146,6 +146,8 @@ def init_db() -> None:
     _migrate_v3()
     # 確保系統初始 admin 帳號存在
     _ensure_default_admin()
+    # 若 line_groups 為空，嘗試從 GSheets 備份還原（重啟保護）
+    _restore_line_groups_if_empty()
 
 
 def _ensure_default_admin() -> None:
@@ -544,11 +546,61 @@ def get_overdue_red_events(hours: int = 4) -> list[dict]:
 
 
 # ── Line 群組→門店 對應表 ─────────────────────────────────────────
+def _sync_groups_to_settings() -> None:
+    """將所有 line_groups 序列化為 JSON，存入 settings 並備份到 GSheets。"""
+    import json as _json
+    try:
+        groups = load_line_groups()
+        data = [
+            {"group_id": g["group_id"], "store_name": g["store_name"],
+             "bot_name": g.get("bot_name", "")}
+            for g in groups
+        ]
+        payload = _json.dumps(data, ensure_ascii=False)
+        _set_setting_local("app_cfg_LINE_GROUPS_JSON", payload)
+        # 非同步備份到 GSheets
+        import threading
+        from utils import settings_store as _ss
+        threading.Thread(target=_ss.save,
+                         args=("app_cfg_LINE_GROUPS_JSON", payload),
+                         daemon=True).start()
+    except Exception:
+        pass
+
+
+def _restore_line_groups_if_empty() -> None:
+    """line_groups 為空時，從 settings 中的 JSON 快照還原（重啟保護）。"""
+    import json as _json
+    try:
+        with _conn() as db:
+            count = db.execute("SELECT COUNT(*) FROM line_groups").fetchone()[0]
+            if count > 0:
+                return  # 已有資料，不覆蓋
+        raw = get_setting("app_cfg_LINE_GROUPS_JSON")
+        if not raw:
+            return
+        groups = _json.loads(raw)
+        now = datetime.now().isoformat()
+        with _conn() as db:
+            for g in groups:
+                if g.get("group_id") and g.get("store_name"):
+                    db.execute(
+                        """INSERT OR IGNORE INTO line_groups
+                           (group_id, store_name, bot_name, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (g["group_id"], g["store_name"],
+                         g.get("bot_name", ""), now, now)
+                    )
+    except Exception:
+        pass
+
+
 def upsert_line_group(group_id: str, store_name: str,
                        bot_name: str = "") -> None:
     """
     新增或更新 Line 群組→門店對應。
     支援從 Streamlit UI 或 Webhook 事件觸發更新。
+    更新後自動備份到 GSheets（透過 settings 層）。
     """
     now = datetime.now().isoformat()
     with _conn() as db:
@@ -561,6 +613,7 @@ def upsert_line_group(group_id: str, store_name: str,
                              updated_at=excluded.updated_at""",
             (group_id, store_name, bot_name, now, now)
         )
+    _sync_groups_to_settings()  # 立即備份
 
 
 def get_store_for_group(group_id: str) -> Optional[str]:
@@ -588,9 +641,10 @@ def load_line_groups() -> list[dict]:
 
 
 def delete_line_group(group_id: str) -> None:
-    """刪除指定群組對應"""
+    """刪除指定群組對應，並同步更新 GSheets 備份。"""
     with _conn() as db:
         db.execute("DELETE FROM line_groups WHERE group_id=?", (group_id,))
+    _sync_groups_to_settings()  # 刪除後同步備份
 
 
 def get_unrecognized_groups() -> list[dict]:
