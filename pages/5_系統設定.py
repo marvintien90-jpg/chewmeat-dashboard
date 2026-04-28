@@ -94,12 +94,39 @@ SHEETS_CONFIG = os.path.join(CONFIG_DIR, "dept_sheets.json")
 DEPT_KEYS = ["行銷", "人資", "採購", "行政", "財務", "資訊"]
 
 def load_sheets_config() -> dict:
+    # 1. 先讀本地 JSON 檔（最快）
     if os.path.exists(SHEETS_CONFIG):
         try:
-            with open(SHEETS_CONFIG, "r", encoding="utf-8") as f:
-                return json.load(f)
+            data = json.load(open(SHEETS_CONFIG, "r", encoding="utf-8"))
+            if any(data.get(k, "").strip() for k in DEPT_KEYS):
+                return data
         except Exception:
             pass
+    # 2. Fallback → SQLite edge_store（Streamlit Cloud 重啟後由 GSheets 還原）
+    try:
+        from utils import edge_store
+        edge_store.init_db()
+        result = {}
+        for k in DEPT_KEYS:
+            v = edge_store.get_setting(f"dept_sheet_{k}") or ""
+            result[k] = v
+        if any(result.values()):
+            return result
+    except Exception:
+        pass
+    # 3. Fallback → DEPT_SHEETS_JSON env / st.secrets
+    try:
+        import streamlit as _st
+        raw = _st.secrets.get("DEPT_SHEETS_JSON", "") or ""
+        if not raw:
+            import os as _os2
+            raw = _os2.environ.get("DEPT_SHEETS_JSON", "")
+        if raw:
+            parsed = json.loads(raw)
+            if any(parsed.values()):
+                return {k: parsed.get(k, "") for k in DEPT_KEYS}
+    except Exception:
+        pass
     return {k: "" for k in DEPT_KEYS}
 
 def extract_sheet_id(url_or_id: str) -> str:
@@ -155,14 +182,36 @@ with col_save:
     if st.button("💾 儲存所有設定", type="primary", use_container_width=True):
         os.makedirs(CONFIG_DIR, exist_ok=True)
         cleaned = {k: extract_sheet_id(v) for k, v in new_ids.items()}
+        errors = []
+        # 1. 寫入本地 JSON
         try:
             with open(SHEETS_CONFIG, "w", encoding="utf-8") as f:
                 json.dump(cleaned, f, ensure_ascii=False, indent=2)
-            # Clear cache
-            st.cache_data.clear()
-            st.success("✅ 設定已儲存！資料快取已清除，請返回專案追蹤師頁面重新載入。")
         except Exception as e:
-            st.error(f"❌ 儲存失敗：{e}")
+            errors.append(f"本地檔案：{e}")
+        # 2. 寫入 SQLite edge_store（重啟後可從此讀取）
+        try:
+            from utils import edge_store as _es
+            _es.init_db()
+            for k, v in cleaned.items():
+                _es.set_setting(f"dept_sheet_{k}", v)
+        except Exception as e:
+            errors.append(f"SQLite：{e}")
+        # 3. 同步備份到 Google Sheets（跨重啟持久化）
+        gsheets_ok = False
+        try:
+            from utils.settings_store import save as _ss_save
+            for k, v in cleaned.items():
+                _ss_save(f"dept_sheet_{k}", v)
+            gsheets_ok = True
+        except Exception as e:
+            errors.append(f"GSheets備份：{e}")
+        st.cache_data.clear()
+        if errors:
+            st.warning(f"⚠️ 部分儲存失敗：{' | '.join(errors)}")
+        else:
+            gmark = "☁️GSheets✅" if gsheets_ok else "☁️GSheets⚠️"
+            st.success(f"✅ 設定已儲存到 SQLite + {gmark}，重啟後自動還原！")
 
 with col_clear:
     if st.button("🗑️ 清除所有設定", use_container_width=True):

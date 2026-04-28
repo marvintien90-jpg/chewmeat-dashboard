@@ -430,6 +430,30 @@ def show_portal():
 # ============================================================
 # 主程式
 # ============================================================
+
+# ── 首次啟動：從 GSheets 還原設定到 SQLite（解決 Streamlit Cloud 重啟清空問題）
+if "settings_restored" not in st.session_state:
+    try:
+        from utils.settings_store import restore_to_sqlite as _restore
+        _n = _restore()
+        if _n:
+            # 同步還原 dept_sheets.json 本地檔
+            try:
+                from utils import edge_store as _es2
+                import json as _json2, os as _os2
+                _cfg_dir = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)), "config")
+                _os2.makedirs(_cfg_dir, exist_ok=True)
+                _dept_keys = ["行銷","人資","採購","行政","財務","資訊"]
+                _ids = {k: (_es2.get_setting(f"dept_sheet_{k}") or "") for k in _dept_keys}
+                if any(_ids.values()):
+                    with open(_os2.path.join(_cfg_dir, "dept_sheets.json"), "w", encoding="utf-8") as _f2:
+                        _json2.dump(_ids, _f2, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    st.session_state["settings_restored"] = True
+
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
