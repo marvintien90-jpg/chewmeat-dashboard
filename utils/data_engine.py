@@ -390,12 +390,34 @@ def _daily_cache_key() -> str:
     return str(date.today())
 
 
-@_lru_cache(maxsize=1)
 def _get_dept_gspread_client():
-    from lib.config import get_service_account_info, DRIVE_SCOPES
+    """取得 gspread client（不 cache，每次呼叫確保憑證最新）"""
+    import json as _jsonlib
     from google.oauth2.service_account import Credentials
     import gspread
-    info = get_service_account_info()
+    DRIVE_SCOPES = [
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/spreadsheets',
+    ]
+    # 優先從 os.environ 讀（Render），其次從 st.secrets 的巢狀區塊讀（Streamlit Cloud）
+    raw = _os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
+    if raw:
+        info = _jsonlib.loads(raw)
+    else:
+        try:
+            import streamlit as _st
+            raw = (_st.secrets.get("GCP_SERVICE_ACCOUNT_JSON", "") or "").strip()
+            if raw:
+                info = _jsonlib.loads(raw)
+            else:
+                nested = _st.secrets.get("gcp_service_account", {})
+                if not nested:
+                    raise RuntimeError("找不到 GCP 服務帳號憑證")
+                info = dict(nested)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"讀取 GCP 憑證失敗: {e}")
     creds = Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
     return gspread.authorize(creds)
 
@@ -715,7 +737,10 @@ def load_all_dept_tasks_cached() -> tuple[pd.DataFrame, dict[str, str]]:
         return load_all_dept_tasks()
 
 
-def write_dept_approval(sheet_id: str, row_index: int, approval: str, comment: str) -> bool:
+def write_dept_approval(sheet_id: str, row_index: int, approval: str, comment: str) -> tuple[bool, str]:
+    """寫回批示結果到 Google Sheet。回傳 (success, error_message)。"""
+    import logging as _logging
+    _log = _logging.getLogger("kerou.data_engine")
     try:
         client = _get_dept_gspread_client()
         sh = client.open_by_key(sheet_id)
@@ -729,7 +754,7 @@ def write_dept_approval(sheet_id: str, row_index: int, approval: str, comment: s
         if ws is None:
             ws = sh.get_worksheet(0)
         if ws is None:
-            return False
+            return False, "找不到工作表"
         headers = ws.row_values(1)
 
         def _ensure_col(name: str) -> int:
@@ -747,9 +772,10 @@ def write_dept_approval(sheet_id: str, row_index: int, approval: str, comment: s
         ws.update_cell(row_index, ac, approval)
         ws.update_cell(row_index, cc, comment)
         ws.update_cell(row_index, tc, now_str)
-        return True
-    except Exception:
-        return False
+        return True, ""
+    except Exception as e:
+        _log.error(f"[write_dept_approval] 失敗 sheet={sheet_id} row={row_index}: {e}")
+        return False, str(e)
 
 
 def write_dept_field(sheet_id: str, row_index: int, field_name: str, value: str, gid: str = "0") -> bool:

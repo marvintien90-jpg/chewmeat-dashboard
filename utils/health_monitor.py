@@ -8,16 +8,27 @@ logger = logging.getLogger("kerou.health_monitor")
 TZ = ZoneInfo("Asia/Taipei")
 
 def _get_secret(key: str, default: str = "") -> str:
-    """從 os.environ 或 st.secrets 讀取金鑰（Streamlit Cloud 用 st.secrets）"""
+    """從 os.environ 或 st.secrets 讀取金鑰（Streamlit Cloud 用 st.secrets）
+    特殊處理：GCP_SERVICE_ACCOUNT_JSON 可能以 [gcp_service_account] 巢狀 TOML 儲存。
+    """
+    import json as _json
+
     val = os.environ.get(key, "")
     if val:
         return val
     try:
         import streamlit as st
-        val = st.secrets.get(key, "") or ""
+        val = (st.secrets.get(key, "") or "").strip()
+        if val:
+            return val
+        # 特殊 fallback：GCP 憑證以巢狀 TOML [gcp_service_account] 儲存
+        if key == "GCP_SERVICE_ACCOUNT_JSON":
+            nested = st.secrets.get("gcp_service_account", {})
+            if nested:
+                return _json.dumps(dict(nested), ensure_ascii=False)
     except Exception:
         pass
-    return val or default
+    return default
 
 RENDER_API_KEY    = lambda: _get_secret("RENDER_API_KEY")
 RENDER_SVC_ID     = lambda: _get_secret("RENDER_SERVICE_ID", "srv-d7m2qre7r5hc73fvaetg")

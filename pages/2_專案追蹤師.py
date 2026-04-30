@@ -703,12 +703,15 @@ else:
                         with col_ap:
                             if st.button("✅ 核准", key=f"approve_{idx}_{row_index}",
                                          use_container_width=True):
-                                ok = write_dept_approval(sheet_id, row_index, "核准", "")
+                                ok, err = write_dept_approval(sheet_id, row_index, "核准", "")
                                 if ok:
                                     st.success("✅ 已核准，寫回成功")
                                     st.cache_data.clear()
                                 else:
-                                    st.error("❌ 寫回失敗，請確認 Sheet 權限")
+                                    if "403" in err or "PERMISSION" in err.upper() or "permission" in err:
+                                        st.error(f"❌ 權限不足：請將服務帳號加為試算表編輯者\nproject-tracker-bot@project-46fe10f6-71ce-4e40-966.iam.gserviceaccount.com")
+                                    else:
+                                        st.error(f"❌ 寫回失敗：{err[:120]}")
                         with col_cm:
                             comment_key = f"comment_{idx}_{row_index}"
                             comment = st.text_input("批示意見（按 Enter 送出）",
@@ -717,12 +720,15 @@ else:
                                                     label_visibility="collapsed")
                             if st.button("📨 送出批示", key=f"submit_{idx}_{row_index}",
                                          use_container_width=True) and comment:
-                                ok = write_dept_approval(sheet_id, row_index, "批示", comment)
+                                ok, err = write_dept_approval(sheet_id, row_index, "批示", comment)
                                 if ok:
                                     st.success(f"✅ 批示已送出：「{comment}」")
                                     st.cache_data.clear()
                                 else:
-                                    st.error("❌ 寫回失敗，請確認 Sheet 權限")
+                                    if "403" in err or "PERMISSION" in err.upper() or "permission" in err:
+                                        st.error(f"❌ 權限不足：請將服務帳號加為試算表編輯者\nproject-tracker-bot@project-46fe10f6-71ce-4e40-966.iam.gserviceaccount.com")
+                                    else:
+                                        st.error(f"❌ 寫回失敗：{err[:120]}")
                         st.markdown('</div>', unsafe_allow_html=True)
                 else:
                     st.caption("⚠️ 此任務無法回寫（未設定 Sheet ID）")
