@@ -661,6 +661,16 @@ elif view_mode == "📊 統計分析":
 else:
     from utils.data_engine import write_dept_approval
 
+    def _safe_write(sheet_id, row_index, approval, comment) -> tuple[bool, str]:
+        """Defensive wrapper — handles both old bool and new (bool, str) return types."""
+        try:
+            result = write_dept_approval(sheet_id, row_index, approval, comment)
+            if isinstance(result, tuple) and len(result) == 2:
+                return result[0], result[1]
+            return bool(result), ""
+        except Exception as _ex:
+            return False, str(_ex)
+
     render_section_header("pencil-square", "總指揮審核批示")
     st.caption("選擇任務後點擊「核准」或輸入批示意見，系統將即時寫回原始 Google Sheet")
 
@@ -703,7 +713,7 @@ else:
                         with col_ap:
                             if st.button("✅ 核准", key=f"approve_{idx}_{row_index}",
                                          use_container_width=True):
-                                ok, err = write_dept_approval(sheet_id, row_index, "核准", "")
+                                ok, err = _safe_write(sheet_id, row_index, "核准", "")
                                 if ok:
                                     st.success("✅ 已核准，寫回成功")
                                     st.cache_data.clear()
@@ -720,7 +730,7 @@ else:
                                                     label_visibility="collapsed")
                             if st.button("📨 送出批示", key=f"submit_{idx}_{row_index}",
                                          use_container_width=True) and comment:
-                                ok, err = write_dept_approval(sheet_id, row_index, "批示", comment)
+                                ok, err = _safe_write(sheet_id, row_index, "批示", comment)
                                 if ok:
                                     st.success(f"✅ 批示已送出：「{comment}」")
                                     st.cache_data.clear()
