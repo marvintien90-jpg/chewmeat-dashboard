@@ -55,12 +55,80 @@ def _get_client():
         return None
 
 
+def _get_drive_folder_id() -> str:
+    """從 st.secrets[google_sheets][drive_folder_id] 或 os.environ 讀取使用者的 Drive 資料夾 ID。
+    建立試算表時指定此資料夾，使其佔用使用者的配額而非服務帳號的配額。"""
+    import os as _os
+    fid = _os.environ.get("DRIVE_FOLDER_ID", "")
+    if fid:
+        return fid
+    try:
+        import streamlit as _st
+        # 1. 直接 key
+        fid = (_st.secrets.get("DRIVE_FOLDER_ID", "") or "").strip()
+        if fid:
+            return fid
+        # 2. 巢狀 [google_sheets] 區塊
+        gs = _st.secrets.get("google_sheets", {})
+        if gs:
+            fid = (gs.get("drive_folder_id", "") or "").strip()
+        return fid
+    except Exception:
+        return ""
+
+
+def _get_fallback_spreadsheet_id() -> str:
+    """取得 fallback 試算表 ID（已知有存取權的現有試算表）"""
+    import os as _os
+    sid = _os.environ.get("SETTINGS_SPREADSHEET_ID", "")
+    if sid:
+        return sid
+    try:
+        import streamlit as _st
+        sid = (_st.secrets.get("SETTINGS_SPREADSHEET_ID", "") or "").strip()
+        if sid:
+            return sid
+        # 使用 [google_sheets] spreadsheet_id 作 fallback
+        gs = _st.secrets.get("google_sheets", {})
+        if gs:
+            sid = (gs.get("spreadsheet_id", "") or "").strip()
+        return sid
+    except Exception:
+        return ""
+
+
 def _get_worksheet(client):
+    folder_id = _get_drive_folder_id()
+
+    # 1. 嘗試以標題直接開啟（最快）
+    ss = None
     try:
         ss = client.open(_SPREADSHEET_TITLE)
     except Exception:
-        ss = client.create(_SPREADSHEET_TITLE)
-        logger.info(f"[settings_store] 建立新設定試算表 id={ss.id}")
+        pass
+
+    # 2. Fallback：使用已知有存取權的試算表（不需要建立新檔，避免配額問題）
+    if ss is None:
+        fb_id = _get_fallback_spreadsheet_id()
+        if fb_id:
+            try:
+                ss = client.open_by_key(fb_id)
+                logger.info(f"[settings_store] 使用 fallback 試算表 id={fb_id}")
+            except Exception as e:
+                logger.warning(f"[settings_store] fallback 試算表開啟失敗: {e}")
+
+    # 3. 最後嘗試建立新試算表（指定 folder_id 放進使用者 Drive）
+    if ss is None:
+        try:
+            if folder_id:
+                ss = client.create(_SPREADSHEET_TITLE, folder_id=folder_id)
+                logger.info(f"[settings_store] 建立新設定試算表 id={ss.id} folder={folder_id}")
+            else:
+                ss = client.create(_SPREADSHEET_TITLE)
+                logger.info(f"[settings_store] 建立新設定試算表 id={ss.id}")
+        except Exception as e:
+            logger.error(f"[settings_store] 無法建立試算表: {e}")
+            raise
 
     try:
         ws = ss.worksheet(_WORKSHEET_NAME)
